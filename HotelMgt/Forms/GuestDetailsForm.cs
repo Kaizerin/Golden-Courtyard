@@ -1,6 +1,14 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using HotelMgt.otherUI; // Add for AmenitiesPanel
+using HotelMgt.Services;
+using HotelMgt.UIStyles;
+using HotelMgt.Utilities;
+using Microsoft.Data.SqlClient;
+using System.Text.RegularExpressions;
+using System.Linq;
+using HotelMgt.Core.Events;
 
 namespace HotelMgt.Forms
 {
@@ -21,6 +29,9 @@ namespace HotelMgt.Forms
         private Label lblPhone;
         private Label lblIDType;
         private Label lblIDNumber;
+
+        // AmenitiesPanel (new, replaces all local amenities logic)
+        private AmenitiesPanel amenitiesPanel = null!;
 
         public GuestDetailsForm(string firstName, string middleName, string lastName, string email, string phone, string idType, string idNumber)
         {
@@ -76,7 +87,7 @@ namespace HotelMgt.Forms
 
             var info = new Label
             {
-                Text = "Please review the guest details below. \nClick Proceed to use this guest, or Cancel to abort.",
+                Text = "Please review the guest details. \nClick Proceed to use this guest, or Cancel to abort.",
                 Location = new Point(20, y + 40),
                 Width = 350,
                 ForeColor = Color.DimGray,

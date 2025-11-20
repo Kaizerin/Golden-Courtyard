@@ -600,44 +600,51 @@ ORDER BY RoomNumber";
                 // If guest lookup not done yet, do it and return after filling fields
                 if (!guestLookupCompleted)
                 {
-                    using var conn = _dbService.GetConnection();
-                    conn.Open();
-                    transaction = conn.BeginTransaction();
-
-                    string firstName = txtFirstName.Text.Trim();
-                    string middleName = txtMiddleName.Text.Trim();
-                    string lastName = txtLastName.Text.Trim();
-
-                    var lookup = GuestLookupHelper.LookupOrPromptGuest(
-                        this, conn, transaction,
-                        firstName, middleName, lastName,
-                        (fn, mn, ln, em, ph, idt, idn) =>
-                        {
-                            txtFirstName.Text = fn;
-                            txtMiddleName.Text = mn;
-                            txtLastName.Text = ln;
-                            txtEmail.Text = em;
-                            txtPhone.Text = ph;
-                            cboIDType.SelectedItem = idt;
-                            txtIDNumber.Text = idn;
-                        });
-
-                    if (lookup.AbortCheckIn)
+                    // Use a dedicated connection and transaction for the lookup dialog.
+                    // This ensures closing/cancelling the dialog cannot complete/affect the transaction used later for the actual check-in.
+                    using (var lookupConn = _dbService.GetConnection())
                     {
-                        guestLookupCompleted = false;
-                        transaction.Rollback();
-                        return;
-                    }
+                        lookupConn.Open();
+                        using (var lookupTx = lookupConn.BeginTransaction())
+                        {
+                            string firstName = txtFirstName.Text.Trim();
+                            string middleName = txtMiddleName.Text.Trim();
+                            string lastName = txtLastName.Text.Trim();
 
-                    guestLookupCompleted = true; // Mark as done
-                    transaction.Rollback(); // No DB changes yet
-                    MessageBox.Show(
-                        "Guest details have been filled. Please review and click Check-In again to confirm.",
-                        "Review Guest Details",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
-                    return; // Let the user review/edit, require another click to actually check in
+                            var lookup = GuestLookupHelper.LookupOrPromptGuest(
+                                this, lookupConn, lookupTx,
+                                firstName, middleName, lastName,
+                                (fn, mn, ln, em, ph, idt, idn) =>
+                                {
+                                    txtFirstName.Text = fn;
+                                    txtMiddleName.Text = mn;
+                                    txtLastName.Text = ln;
+                                    txtEmail.Text = em;
+                                    txtPhone.Text = ph;
+                                    cboIDType.SelectedItem = idt;
+                                    txtIDNumber.Text = idn;
+                                });
+
+                            if (lookup.AbortCheckIn)
+                            {
+                                // If user cancelled/closed dialog, rollback lookupTx and return.
+                                try { lookupTx.Rollback(); } catch { }
+                                guestLookupCompleted = false;
+                                return;
+                            }
+
+                            // We didn't persist anything during lookup; rollback and ask user to confirm by clicking again.
+                            try { lookupTx.Rollback(); } catch { }
+                            guestLookupCompleted = true; // Mark as done
+                            MessageBox.Show(
+                                "Guest details have been filled. Please review and click Check-In again to confirm.",
+                                "Review Guest Details",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Information
+                            );
+                            return; // Let the user review/edit, require another click to actually check in
+                        }
+                    }
                 }
 
                 // Reset flag for next check-in
@@ -672,7 +679,7 @@ ORDER BY RoomNumber";
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning
                     );
-                    transaction.Rollback();
+                    try { transaction.Rollback(); } catch { }
                     return;
                 }
 
