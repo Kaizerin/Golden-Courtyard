@@ -325,6 +325,23 @@ ORDER BY a.Category, a.Name;";
                 var dt = new DataTable();
                 adapter.Fill(dt);
 
+                // Calculate sum before binding
+                decimal sum = 0m;
+                foreach (DataRow dr in dt.Rows)
+                {
+                    if (dr["LineTotal"] != DBNull.Value)
+                        sum += Convert.ToDecimal(dr["LineTotal"]);
+                }
+
+                // Add Grand Total row to DataTable
+                if (dt.Rows.Count > 0)
+                {
+                    var totalRow = dt.NewRow();
+                    totalRow["Name"] = "Grand Total";
+                    totalRow["LineTotal"] = sum;
+                    dt.Rows.Add(totalRow);
+                }
+
                 dgvAmenities.DataSource = dt;
 
                 var cols = dgvAmenities.Columns;
@@ -343,13 +360,6 @@ ORDER BY a.Category, a.Name;";
                     cTotal.HeaderText = "Total";
                     cTotal.DefaultCellStyle.Format = "C2";
                     cTotal.DefaultCellStyle.FormatProvider = _currencyCulture;
-                }
-
-                decimal sum = 0m;
-                foreach (DataRow dr in dt.Rows)
-                {
-                    if (dr["LineTotal"] != DBNull.Value)
-                        sum += Convert.ToDecimal(dr["LineTotal"]);
                 }
 
                 // 2) Description (Notes on CheckIns)

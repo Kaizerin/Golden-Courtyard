@@ -44,6 +44,9 @@ namespace HotelMgt.UserControls.Employee
         // To avoid recursion while sanitizing phone text
         private bool _suppressPhoneTextChanged;
 
+        // Add this field to your class:
+        private bool _isSubscribedToSharedTimer = false;
+
         public ReservationControl()
         {
             InitializeComponent();
@@ -108,6 +111,20 @@ namespace HotelMgt.UserControls.Employee
             bool isCashInit = cboPaymentMethod.SelectedItem?.ToString() == "Cash";
             txtTransactionRef.Enabled = !isCashInit;
             if (isCashInit) txtTransactionRef.Clear();
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            RoomEvents.RoomsChanged += OnRoomsChanged;
+            // SharedTimerManager removed — control relies on RoomEvents to stay in sync.
+        }
+
+        private void OnRoomsChanged(object? sender, RoomsChangedEventArgs e)
+        {
+            // Mirror CheckInControl behavior: refresh available room list when rooms change.
+            // This ensures that once a room is reserved (or occupied), it disappears from cboRoom.
+            LoadAvailableRooms();
         }
 
         private void AttachPhoneNumberValidation()
@@ -318,7 +335,7 @@ namespace HotelMgt.UserControls.Employee
 
                     await tx.CommitAsync();
 
-                    // Notify listeners (like AvailableRoomsControl) to refresh
+                    // Notify listeners (like AvailableRoomsControl and this control via RoomEvents) to refresh
                     RoomEvents.Publish(RoomChangeType.Updated, (int)room.RoomId);
                 }
                 catch
@@ -385,7 +402,7 @@ namespace HotelMgt.UserControls.Employee
                 form.ShowDialog(this);
 
                 ClearForm();
-                LoadAvailableRooms();
+                // Do not call LoadAvailableRooms() directly here — RoomEvents.Publish will trigger OnRoomsChanged which calls LoadAvailableRooms()
                 CalculateTotalAmount();
             }
             catch (Exception ex)
@@ -573,6 +590,19 @@ namespace HotelMgt.UserControls.Employee
             {
                 MessageBox.Show($"Error loading amenities: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            RoomEvents.RoomsChanged -= OnRoomsChanged;
+            base.OnHandleDestroyed(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                RoomEvents.RoomsChanged -= OnRoomsChanged;
+            base.Dispose(disposing);
         }
     }
 }

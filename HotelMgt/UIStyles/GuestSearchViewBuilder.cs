@@ -48,7 +48,7 @@ namespace HotelMgt.UIStyles
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // subtitle
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // "Search Guests"
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // search row
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); // grid
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); // grid + actions container
             root.Controls.Add(layout);
 
             lblTitle = new Label
@@ -133,6 +133,13 @@ namespace HotelMgt.UIStyles
 
             layout.Controls.Add(searchRow, 0, 3);
 
+            // Guests grid + action row container
+            var container = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.White
+            };
+
             // Guests grid
             dgvGuests = new DataGridView
             {
@@ -161,7 +168,40 @@ namespace HotelMgt.UIStyles
                 }
             };
 
-            layout.Controls.Add(dgvGuests, 0, 4);
+            container.Controls.Add(dgvGuests);
+
+            // Action row at bottom-right containing Delete button
+            var actionRow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 52,
+                FlowDirection = FlowDirection.RightToLeft,
+                Padding = new Padding(0, 8, 0, 0),
+                BackColor = Color.Transparent,
+                AutoSize = false
+            };
+
+            var btnDelete = new RoundedButton
+            {
+                Name = "btnDelete",
+                Text = "Delete",
+                AutoSize = false,
+                Size = new Size(120, 38),
+                BackColor = Color.FromArgb(220, 38, 38),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 11F, FontStyle.Regular, GraphicsUnit.Point),
+                Margin = new Padding(8, 0, 12, 0)
+            };
+            btnDelete.MinimumSize = new Size(100, 38);
+            btnDelete.FlatStyle = FlatStyle.Flat;
+            btnDelete.FlatAppearance.BorderSize = 0;
+
+            // Add to action row (right-most due to RightToLeft)
+            actionRow.Controls.Add(btnDelete);
+
+            container.Controls.Add(actionRow);
+
+            layout.Controls.Add(container, 0, 4);
 
             parent.ResumeLayout(performLayout: true);
         }

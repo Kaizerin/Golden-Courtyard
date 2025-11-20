@@ -4,6 +4,8 @@ using HotelMgt.UIStyles;
 using HotelMgt.Utilities;
 using Microsoft.Data.SqlClient;
 using System.Text.RegularExpressions;
+using System.Linq;
+using HotelMgt.Core.Events;
 
 namespace HotelMgt.UserControls.Employee
 {
@@ -11,7 +13,7 @@ namespace HotelMgt.UserControls.Employee
     {
         private readonly DatabaseService _dbService;
         private readonly ActivityLogService _logService;
-        private readonly GuestService _guestService = new GuestService();
+        private readonly GuestService _guest_service = new GuestService();
 
         private TabControl tabCheckInRoot = null!;
 
@@ -54,6 +56,9 @@ namespace HotelMgt.UserControls.Employee
         // Current reservation
         private SelectedReservation? _currentReservation;
 
+        // Add this field to your class (e.g., after other private fields)
+        private bool guestLookupCompleted = false;
+
         private sealed class SelectedReservation
         {
             public int ReservationId { get; init; }
@@ -75,6 +80,8 @@ namespace HotelMgt.UserControls.Employee
             _logService = new ActivityLogService();
             Load += CheckInControl_Load;
         }
+
+        private bool _suppressPhoneTextChanged = false; // Add this field
 
         private void CheckInControl_Load(object? sender, EventArgs e)
         {
@@ -119,8 +126,58 @@ namespace HotelMgt.UserControls.Employee
                 btnCancelReservation.Click += BtnCancelReservation_Click;
             }
 
+            // Phone number: allow only digits (like ReservationControl)
+            txtPhone.KeyPress += (s, e2) =>
+            {
+                if (!char.IsControl(e2.KeyChar) && !char.IsDigit(e2.KeyChar))
+                    e2.Handled = true;
+            };
+            txtPhone.TextChanged += (s, e2) =>
+            {
+                if (_suppressPhoneTextChanged) return;
+                var original = txtPhone.Text;
+                if (string.IsNullOrEmpty(original)) return;
+
+                Span<char> buffer = stackalloc char[original.Length];
+                int idx = 0;
+                foreach (var ch in original)
+                {
+                    if (char.IsDigit(ch)) buffer[idx++] = ch;
+                }
+
+                if (idx != original.Length)
+                {
+                    _suppressPhoneTextChanged = true;
+                    var caret = txtPhone.SelectionStart;
+                    txtPhone.Text = new string(buffer[..idx]);
+                    txtPhone.SelectionStart = Math.Min(caret - (original.Length - idx), txtPhone.Text.Length);
+                    _suppressPhoneTextChanged = false;
+                }
+            };
+            txtPhone.MaxLength = 15;
+
             LoadAvailableRooms();
             UpdateReservationActionState();
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            RoomEvents.RoomsChanged += OnRoomsChanged;
+        }
+
+        private void OnRoomsChanged(object? sender, RoomsChangedEventArgs e)
+        {
+            LoadAvailableRooms();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                RoomEvents.RoomsChanged -= OnRoomsChanged;
+            }
+            base.Dispose(disposing);
         }
 
         #region Reservation Lookup / Actions
@@ -283,12 +340,47 @@ SELECT CAST(SCOPE_IDENTITY() AS INT);";
                         checkInId = (int)cmd.ExecuteScalar()!;
                     }
 
+                    // Copy amenities from ReservationAmenities to CheckInAmenities
+                    const string copyAmenitiesSql = @"
+INSERT INTO CheckInAmenities (CheckInID, AmenityID, Quantity, UnitPrice, CreatedAt)
+SELECT @CheckInID, AmenityID, Quantity, UnitPrice, GETDATE()
+FROM ReservationAmenities
+WHERE ReservationID = @ReservationID;";
+
+                    using (var cmd = new SqlCommand(copyAmenitiesSql, conn, transaction))
+                    {
+                        cmd.Parameters.AddWithValue("@CheckInID", checkInId);
+                        cmd.Parameters.AddWithValue("@ReservationID", _currentReservation.ReservationId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    // Insert any *additional* amenities selected at check-in that are not already in the reservation
                     if (selectedAmenities.Count > 0)
-                        InsertCheckInAmenities(conn, transaction, checkInId, selectedAmenities);
+                    {
+                        // Get amenity IDs already in reservation
+                        var existingAmenityIds = new HashSet<int>();
+                        using (var cmd = new SqlCommand("SELECT AmenityID FROM ReservationAmenities WHERE ReservationID = @ReservationID", conn, transaction))
+                        {
+                            cmd.Parameters.AddWithValue("@ReservationID", _currentReservation.ReservationId);
+                            using var reader = cmd.ExecuteReader();
+                            while (reader.Read())
+                                existingAmenityIds.Add(reader.GetInt32(0));
+                        }
+
+                        var newAmenities = selectedAmenities
+                            .Where(a => !existingAmenityIds.Contains(a.AmenityID))
+                            .ToList();
+
+                        if (newAmenities.Count > 0)
+                            InsertCheckInAmenities(conn, transaction, checkInId, newAmenities);
+                    }
 
                     UpdateRoomStatus(conn, transaction, _currentReservation.RoomId, "Occupied");
 
                     transaction.Commit();
+
+                    // Publish room change so other controls refresh immediately
+                    RoomEvents.Publish(RoomChangeType.Updated, _currentReservation.RoomId);
 
                     try
                     {
@@ -350,7 +442,7 @@ SELECT CAST(SCOPE_IDENTITY() AS INT);";
                     const string sql = @"
 UPDATE Reservations
 SET ReservationStatus = 'Cancelled', EmployeeID = @EmployeeId, UpdatedAt = @Now
-WHERE ReservationID = @ReservationId;";
+WHERE ReservationID = @ReservationId;"; 
                     using (var cmd = new SqlCommand(sql, conn, tx))
                     {
                         cmd.Parameters.AddWithValue("@EmployeeId", CurrentUser.EmployeeId);
@@ -505,50 +597,74 @@ ORDER BY RoomNumber";
                 if (!ValidateWalkInInputs())
                     return;
 
+                // If guest lookup not done yet, do it and return after filling fields
+                if (!guestLookupCompleted)
+                {
+                    using var conn = _dbService.GetConnection();
+                    conn.Open();
+                    transaction = conn.BeginTransaction();
+
+                    string firstName = txtFirstName.Text.Trim();
+                    string middleName = txtMiddleName.Text.Trim();
+                    string lastName = txtLastName.Text.Trim();
+
+                    var lookup = GuestLookupHelper.LookupOrPromptGuest(
+                        this, conn, transaction,
+                        firstName, middleName, lastName,
+                        (fn, mn, ln, em, ph, idt, idn) =>
+                        {
+                            txtFirstName.Text = fn;
+                            txtMiddleName.Text = mn;
+                            txtLastName.Text = ln;
+                            txtEmail.Text = em;
+                            txtPhone.Text = ph;
+                            cboIDType.SelectedItem = idt;
+                            txtIDNumber.Text = idn;
+                        });
+
+                    if (lookup.AbortCheckIn)
+                    {
+                        guestLookupCompleted = false;
+                        transaction.Rollback();
+                        return;
+                    }
+
+                    guestLookupCompleted = true; // Mark as done
+                    transaction.Rollback(); // No DB changes yet
+                    MessageBox.Show(
+                        "Guest details have been filled. Please review and click Check-In again to confirm.",
+                        "Review Guest Details",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                    return; // Let the user review/edit, require another click to actually check in
+                }
+
+                // Reset flag for next check-in
+                guestLookupCompleted = false;
+
                 // Use AmenitiesPanel for selected amenities
                 var selectedAmenities = amenitiesPanel.GetSelectedAmenities();
 
-                using var conn = _dbService.GetConnection();
-                conn.Open();
-                transaction = conn.BeginTransaction();
+                using var conn2 = _dbService.GetConnection();
+                conn2.Open();
+                transaction = conn2.BeginTransaction();
 
-                string firstName = txtFirstName.Text.Trim();
-                string middleName = txtMiddleName.Text.Trim();
-                string lastName = txtLastName.Text.Trim();
+                string firstNameFinal = txtFirstName.Text.Trim();
+                string middleNameFinal = txtMiddleName.Text.Trim();
+                string lastNameFinal = txtLastName.Text.Trim();
                 string phone = txtPhone.Text.Trim();
                 string email = txtEmail.Text?.Trim() ?? string.Empty;
                 string idType = cboIDType.SelectedItem!.ToString()!;
                 string idNumber = txtIDNumber.Text.Trim();
 
-                // Use the helper, which will only rollback after the reader is disposed
-                var lookup = GuestLookupHelper.LookupOrPromptGuest(
-                    this, conn, transaction,
-                    firstName, middleName, lastName,
-                    (fn, mn, ln, em, ph, idt, idn) =>
-                    {
-                        txtFirstName.Text = fn;
-                        txtMiddleName.Text = mn;
-                        txtLastName.Text = ln;
-                        txtEmail.Text = em;
-                        txtPhone.Text = ph;
-                        cboIDType.SelectedItem = idt;
-                        txtIDNumber.Text = idn;
-                    });
-
-                if (lookup.AbortCheckIn)
-                    return;
-
-                int guestId = lookup.GuestId;
-                if (!lookup.IsExistingGuest)
-                {
-                    guestId = _guestService.EnsureGuest(
-                        conn, transaction,
-                        firstName, middleName, lastName, phone, email, idType, idNumber
-                    );
-                }
+                int guestId = _guest_service.EnsureGuest(
+                    conn2, transaction,
+                    firstNameFinal, middleNameFinal, lastNameFinal, phone, email, idType, idNumber
+                );
 
                 // AFTER guestId is determined
-                if (_guestService.HasActiveReservation(conn, transaction, guestId))
+                if (_guest_service.HasActiveReservation(conn2, transaction, guestId))
                 {
                     MessageBox.Show(
                         "This guest already has a confirmed reservation. Please use the reservation code or ask the front desk for assistance.",
@@ -563,14 +679,14 @@ ORDER BY RoomNumber";
                 int roomId = (int)((dynamic)cboRoom.SelectedItem).RoomId;
 
                 const string insertCheckIn = @"
-                    INSERT INTO CheckIns
-                    (ReservationID, GuestID, RoomID, EmployeeID, CheckInDateTime, ExpectedCheckOutDate, NumberOfGuests, Notes, CreatedAt)
-                    VALUES
-                    (NULL, @GuestID, @RoomID, @EmployeeID, @CheckInDateTime, @ExpectedCheckOutDate, @NumberOfGuests, @Notes, @CreatedAt);
-                    SELECT CAST(SCOPE_IDENTITY() AS INT);";
+            INSERT INTO CheckIns
+            (ReservationID, GuestID, RoomID, EmployeeID, CheckInDateTime, ExpectedCheckOutDate, NumberOfGuests, Notes, CreatedAt)
+            VALUES
+            (NULL, @GuestID, @RoomID, @EmployeeID, @CheckInDateTime, @ExpectedCheckOutDate, @NumberOfGuests, @Notes, @CreatedAt);
+            SELECT CAST(SCOPE_IDENTITY() AS INT);";
 
                 int checkInId;
-                using (var cmd = new SqlCommand(insertCheckIn, conn, transaction))
+                using (var cmd = new SqlCommand(insertCheckIn, conn2, transaction))
                 {
                     cmd.Parameters.AddWithValue("@GuestID", guestId);
                     cmd.Parameters.AddWithValue("@RoomID", roomId);
@@ -585,10 +701,13 @@ ORDER BY RoomNumber";
                 }
 
                 if (selectedAmenities.Count > 0)
-                    InsertCheckInAmenities(conn, transaction, checkInId, selectedAmenities);
+                    InsertCheckInAmenities(conn2, transaction, checkInId, selectedAmenities);
 
-                UpdateRoomStatus(conn, transaction, roomId, "Occupied");
+                UpdateRoomStatus(conn2, transaction, roomId, "Occupied");
                 transaction.Commit();
+
+                // Publish change so other tabs/controls refresh immediately
+                RoomEvents.Publish(RoomChangeType.Updated, roomId);
 
                 try
                 {
@@ -645,6 +764,13 @@ ORDER BY RoomNumber";
 
             if (dtpCheckOut.Value.Date <= DateTime.Today)
                 return Fail("Expected Check-Out must be after today.", dtpCheckOut);
+
+            if (cboRoom.SelectedItem != null)
+            {
+                dynamic room = cboRoom.SelectedItem;
+                if ((int)numGuests.Value > (int)room.MaxOccupancy)
+                    return Fail($"Selected room allows up to {room.MaxOccupancy} guests.", numGuests);
+            }
 
             return true;
         }

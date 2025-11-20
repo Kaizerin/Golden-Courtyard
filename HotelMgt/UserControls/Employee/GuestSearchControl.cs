@@ -47,15 +47,13 @@ namespace HotelMgt.UserControls.Employee
                 out dgvGuests);
 
             // Hook Delete button created by the builder
+            // Hidden completely for now (no wiring). Keep builder producing the control so it can be re-enabled later.
             btnDelete = this.Controls.Find("btnDelete", true).OfType<Button>().FirstOrDefault();
             if (btnDelete != null)
             {
-                // Only Admins see and can use Delete
-                btnDelete.Visible = IsAdmin;
-                if (IsAdmin)
-                {
-                    btnDelete.Click += (_, __) => DeleteSelectedGuest();
-                }
+                btnDelete.Visible = false;   // completely hide
+                btnDelete.Enabled = false;   // ensure disabled if visible by some layout quirk
+                btnDelete = null;            // clear reference so UpdateDeleteButtonState / other logic is a no-op
             }
 
             // Grid behavior
@@ -163,6 +161,7 @@ namespace HotelMgt.UserControls.Employee
 
         private void UpdateDeleteButtonState()
         {
+            // btnDelete reference cleared when hidden; treat as not present
             if (btnDelete == null) return;
 
             if (!IsAdmin)
@@ -232,21 +231,29 @@ namespace HotelMgt.UserControls.Employee
                 try
                 {
                     // 2) Cascade delete (manual) in safe FK order
-                    // Payments referencing guest or any of the guest's reservations
                     using (var cmd = new SqlCommand(@"
+-- Remove CheckIn amenities for this guest's checkins
 DELETE FROM CheckInAmenities
 WHERE CheckInID IN (SELECT CheckInID FROM CheckIns WHERE GuestID = @GuestID);
 
+-- Remove Reservation amenities for this guest's reservations
+DELETE FROM ReservationAmenities
+WHERE ReservationID IN (SELECT ReservationID FROM Reservations WHERE GuestID = @GuestID);
+
+-- Remove Payments referencing guest or any of the guest's reservations
 DELETE FROM Payments
 WHERE GuestID = @GuestID
    OR ReservationID IN (SELECT ReservationID FROM Reservations WHERE GuestID = @GuestID);
 
+-- Remove CheckIns for guest
 DELETE FROM CheckIns
 WHERE GuestID = @GuestID;
 
+-- Remove Reservations for guest
 DELETE FROM Reservations
 WHERE GuestID = @GuestID;
 
+-- Finally remove guest
 DELETE FROM Guests
 WHERE GuestID = @GuestID;", conn, tx))
                     {

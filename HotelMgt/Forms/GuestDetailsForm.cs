@@ -38,7 +38,7 @@ namespace HotelMgt.Forms
         private void BuildUI()
         {
             this.Text = "Existing Guest Found";
-            this.Size = new Size(400, 300);
+            this.Size = new Size(400, 340);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
@@ -76,7 +76,7 @@ namespace HotelMgt.Forms
 
             var info = new Label
             {
-                Text = "Double-click anywhere to confirm this is the correct guest.",
+                Text = "Please review the guest details below. \nClick Proceed to use this guest, or Cancel to abort.",
                 Location = new Point(20, y + 40),
                 Width = 350,
                 ForeColor = Color.DimGray,
@@ -84,17 +84,42 @@ namespace HotelMgt.Forms
             };
             Controls.Add(info);
 
-            // Double-click anywhere to confirm
-            this.DoubleClick += Confirm;
-            foreach (Control c in this.Controls)
-                c.DoubleClick += Confirm;
-        }
+            // Proceed and Cancel buttons
+            var btnProceed = new Button
+            {
+                Text = "Proceed",
+                DialogResult = DialogResult.OK,
+                Location = new Point(120, y + 90),
+                Size = new Size(100, 32),
+                Font = font
+            };
+            btnProceed.Click += (s, e) =>
+            {
+                IsConfirmed = true;
+                this.DialogResult = DialogResult.OK;
+                this.Close();
+            };
 
-        private void Confirm(object? sender, EventArgs e)
-        {
-            IsConfirmed = true;
-            this.DialogResult = DialogResult.OK;
-            this.Close();
+            var btnCancel = new Button
+            {
+                Text = "Cancel",
+                DialogResult = DialogResult.Cancel,
+                Location = new Point(230, y + 90),
+                Size = new Size(100, 32),
+                Font = font
+            };
+            btnCancel.Click += (s, e) =>
+            {
+                IsConfirmed = false;
+                this.DialogResult = DialogResult.Cancel;
+                this.Close();
+            };
+
+            Controls.Add(btnProceed);
+            Controls.Add(btnCancel);
+
+            this.AcceptButton = btnProceed;
+            this.CancelButton = btnCancel;
         }
     }
 }

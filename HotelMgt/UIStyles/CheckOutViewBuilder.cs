@@ -307,6 +307,10 @@ namespace HotelMgt.UIStyles
             };
             leftStack.Controls.Add(descLabel, 0, 1);
 
+            // Make the box moderately larger and taller
+            var descBoxWidth = 300; // moderately wide
+            var descBoxHeight = 100; // moderately tall
+
             var txtDesc = new TextBox
             {
                 Name = "txtCheckInDescription",
@@ -314,11 +318,14 @@ namespace HotelMgt.UIStyles
                 ReadOnly = true,
                 Enabled = false,
                 ScrollBars = ScrollBars.Vertical,
-                Dock = DockStyle.Fill,
                 BorderStyle = BorderStyle.FixedSingle,
                 Font = new Font("Segoe UI", 9),
                 BackColor = Color.White,
-                Margin = new Padding(0)
+                Margin = new Padding(0),
+                MinimumSize = new Size(descBoxWidth, descBoxHeight),
+                MaximumSize = new Size(descBoxWidth, descBoxHeight),
+                Size = new Size(descBoxWidth, descBoxHeight),
+                Dock = DockStyle.None // Not Dock.Fill, so size is respected
             };
             leftStack.Controls.Add(txtDesc, 0, 2);
 
