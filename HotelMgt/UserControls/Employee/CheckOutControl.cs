@@ -6,6 +6,9 @@ using System.Globalization;
 using System.Windows.Forms;
 using HotelMgt.Services;
 using HotelMgt.Utilities;
+using HotelMgt.UIStyles; // ADD
+using System.Linq;       // ADD
+using HotelMgt.Custom;
 
 namespace HotelMgt.UserControls.Employee
 {
@@ -15,25 +18,30 @@ namespace HotelMgt.UserControls.Employee
         private readonly ActivityLogService _logService;
 
         private TextBox txtSearch = null!;
-        private Button btnSearch = null!;
+        private RoundedButton btnSearch = null!;
         private DataGridView dgvActiveCheckIns = null!;
         private Panel panelCheckOutDetails = null!;
         private Label lblGuestName = null!;
         private Label lblRoomInfo = null!;
         private Label lblCheckInDate = null!;
-        private Label lblCheckOutDate = null!; // actual check-out date (today)
-        private Label lblExpectedCheckOutDate = null!; // expected check-out date from DB
+        private Label lblCheckOutDate = null!;
+        private Label lblExpectedCheckOutDate = null!;
         private Label lblNights = null!;
         private Label lblRatePerNight = null!;
+        private TextBox txtExtra = null!;
         private Label lblTotalAmount = null!;
         private ComboBox cboPaymentMethod = null!;
         private TextBox txtTransactionRef = null!;
-        private Button btnProcessCheckOut = null!;
+        private RoundedButton btnProcessCheckOut = null!;
 
-        private int selectedCheckInId = 0; // This is CheckIns.CheckInID
+        // amenities grid reference
+        private DataGridView dgvAmenities = null!;
+        // NEW: description box reference
+        private TextBox txtCheckInDescription = null!;
+
+        private int selectedCheckInId = 0;
         private decimal totalAmount = 0;
 
-        // Use Philippine Peso for all currency formatting
         private readonly CultureInfo _currencyCulture = CultureInfo.GetCultureInfo("en-PH");
 
         public CheckOutControl()
@@ -47,14 +55,51 @@ namespace HotelMgt.UserControls.Employee
         private void CheckOutControl_Load(object? sender, EventArgs e)
         {
             InitializeControls();
+
+            // Locate the amenities grid and description created by the builder
+            dgvAmenities = panelCheckOutDetails.Controls.Find("dgvAmenities", true)
+                .OfType<DataGridView>()
+                .FirstOrDefault()!;
+
+            txtCheckInDescription = panelCheckOutDetails.Controls.Find("txtCheckInDescription", true)
+                .OfType<TextBox>()
+                .FirstOrDefault()!;
+
+            if (dgvAmenities != null)
+                GridTheme.ApplyStandard(dgvAmenities);
+
+            txtSearch.KeyDown -= TxtSearch_KeyDown;
+            txtSearch.KeyDown += TxtSearch_KeyDown;
+
+            txtExtra.TextChanged += TxtExtra_TextChanged;
+
+            cboPaymentMethod.SelectedIndexChanged -= CboPaymentMethod_SelectedIndexChanged;
+            cboPaymentMethod.SelectedIndexChanged += CboPaymentMethod_SelectedIndexChanged;
+            CboPaymentMethod_SelectedIndexChanged(this, EventArgs.Empty);
+
             LoadActiveCheckIns();
 
-            // Refresh when user switches to this tab
             this.VisibleChanged -= CheckOutControl_VisibleChanged;
             this.VisibleChanged += CheckOutControl_VisibleChanged;
         }
 
-        // Add this handler inside the class
+        private void TxtSearch_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                LoadActiveCheckIns(txtSearch.Text.Trim());
+            }
+        }
+
+        private void CboPaymentMethod_SelectedIndexChanged(object? sender, EventArgs e)
+        {
+            var method = cboPaymentMethod.SelectedItem?.ToString() ?? "Cash";
+            bool needsRef = !string.Equals(method, "Cash", StringComparison.OrdinalIgnoreCase);
+            txtTransactionRef.Enabled = needsRef;
+            if (!needsRef) txtTransactionRef.Clear();
+        }
+
         private void CheckOutControl_VisibleChanged(object? sender, EventArgs e)
         {
             if (this.Visible)
@@ -63,204 +108,46 @@ namespace HotelMgt.UserControls.Employee
             }
         }
 
+        // Build UI via UIStyles builder
         private void InitializeControls()
         {
-            BackColor = Color.FromArgb(240, 244, 248);
-            Dock = DockStyle.Fill;
+            CheckOutViewBuilder.Build(
+                this,
+                out var lblTitle,
+                out var lblSubtitle,
+                out txtSearch,
+                out btnSearch,
+                out dgvActiveCheckIns,
+                out panelCheckOutDetails,
+                out lblGuestName,
+                out lblRoomInfo,
+                out lblCheckInDate,
+                out lblCheckOutDate,
+                out lblExpectedCheckOutDate,
+                out lblNights,
+                out lblRatePerNight,
+                out txtExtra,
+                out lblTotalAmount,
+                out cboPaymentMethod,
+                out txtTransactionRef,
+                out btnProcessCheckOut
+            );
 
-            // Title
-            var lblTitle = new Label
-            {
-                Text = "Guest Check-Out",
-                Font = new Font("Segoe UI", 18, FontStyle.Bold),
-                Location = new Point(20, 20),
-                AutoSize = true
-            };
-            Controls.Add(lblTitle);
-
-            var lblSubtitle = new Label
-            {
-                Text = "Process checkout and final payment",
-                Font = new Font("Segoe UI", 10),
-                ForeColor = Color.Gray,
-                Location = new Point(20, 55),
-                AutoSize = true
-            };
-            Controls.Add(lblSubtitle);
-
-            // Search
-            var lblSearch = new Label
-            {
-                Text = "Search Check-In:",
-                Font = new Font("Segoe UI", 9),
-                Location = new Point(20, 100),
-                AutoSize = true
-            };
-            Controls.Add(lblSearch);
-
-            txtSearch = new TextBox
-            {
-                Location = new Point(20, 125),
-                Size = new Size(400, 25),
-                Font = new Font("Segoe UI", 10),
-                PlaceholderText = "Room number or guest name"
-            };
-            Controls.Add(txtSearch);
-
-            btnSearch = new Button
-            {
-                Text = "Search",
-                Location = new Point(430, 125),
-                Size = new Size(100, 30),
-                BackColor = Color.FromArgb(37, 99, 235),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
-            };
-            btnSearch.FlatAppearance.BorderSize = 0;
             btnSearch.Click += BtnSearch_Click;
-            Controls.Add(btnSearch);
-
-            // Grid
-            dgvActiveCheckIns = new DataGridView
-            {
-                Location = new Point(20, 170),
-                Size = new Size(1200, 150),
-                BackgroundColor = Color.White,
-                BorderStyle = BorderStyle.None,
-                AllowUserToAddRows = false,
-                AllowUserToDeleteRows = false,
-                AllowUserToResizeRows = false,
-                ReadOnly = true,
-                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-                MultiSelect = false,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
-                DefaultCellStyle = { WrapMode = DataGridViewTriState.True },
-                RowHeadersVisible = false, // hide left selection indicator column
-                RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.DisableResizing
-            };
             dgvActiveCheckIns.SelectionChanged += DgvActiveCheckIns_SelectionChanged;
-            Controls.Add(dgvActiveCheckIns);
-
-            // Details panel (scrollable and taller so content isn't clipped)
-            panelCheckOutDetails = new Panel
-            {
-                Location = new Point(20, 340),  // 170 + 150 + 20 spacing
-                Size = new Size(1200, 420),
-                BackColor = Color.White,
-                BorderStyle = BorderStyle.FixedSingle,
-                Visible = false,
-                AutoScroll = true,
-                AutoScrollMargin = new Size(0, 12)
-            };
-            Controls.Add(panelCheckOutDetails);
-
-            CreateCheckOutDetailsPanel();
-        }
-
-        private void CreateCheckOutDetailsPanel()
-        {
-            var lblPanelTitle = new Label
-            {
-                Text = "Check-Out Details",
-                Font = new Font("Segoe UI", 14, FontStyle.Bold),
-                Location = new Point(20, 15),
-                AutoSize = true
-            };
-            panelCheckOutDetails.Controls.Add(lblPanelTitle);
-
-            int yPos = 55;
-
-            CreateDetailRow(panelCheckOutDetails, "Guest:", out lblGuestName, 20, yPos);
-            yPos += 30;
-            CreateDetailRow(panelCheckOutDetails, "Room:", out lblRoomInfo, 20, yPos);
-            yPos += 30;
-            CreateDetailRow(panelCheckOutDetails, "Check-In Date:", out lblCheckInDate, 20, yPos);
-            yPos += 30;
-            CreateDetailRow(panelCheckOutDetails, "Check-Out Date:", out lblCheckOutDate, 20, yPos); // actual (today)
-            yPos += 30;
-            CreateDetailRow(panelCheckOutDetails, "Expected Check-Out Date:", out lblExpectedCheckOutDate, 20, yPos); // expected from DB
-            yPos += 30;
-            CreateDetailRow(panelCheckOutDetails, "Nights Stayed:", out lblNights, 20, yPos);
-            yPos += 30;
-            CreateDetailRow(panelCheckOutDetails, "Rate Per Night:", out lblRatePerNight, 20, yPos);
-            yPos += 30;
-            CreateDetailRow(panelCheckOutDetails, "Total Amount:", out lblTotalAmount, 20, yPos);
-            yPos += 40;
-
-            var lblPayment = new Label
-            {
-                Text = "Payment Method *",
-                Font = new Font("Segoe UI", 9),
-                Location = new Point(20, yPos),
-                AutoSize = true
-            };
-            panelCheckOutDetails.Controls.Add(lblPayment);
-
-            cboPaymentMethod = new ComboBox
-            {
-                Location = new Point(20, yPos + 22),
-                Size = new Size(300, 25),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = new Font("Segoe UI", 10)
-            };
-            cboPaymentMethod.Items.AddRange(new object[] { "Cash", "Credit Card", "Debit Card" });
-            cboPaymentMethod.SelectedIndex = 0;
-            panelCheckOutDetails.Controls.Add(cboPaymentMethod);
-
-            var lblTransRef = new Label
-            {
-                Text = "Transaction Reference",
-                Font = new Font("Segoe UI", 9),
-                Location = new Point(340, yPos),
-                AutoSize = true
-            };
-            panelCheckOutDetails.Controls.Add(lblTransRef);
-
-            txtTransactionRef = new TextBox
-            {
-                Location = new Point(340, yPos + 22),
-                Size = new Size(300, 25),
-                Font = new Font("Segoe UI", 10)
-            };
-            panelCheckOutDetails.Controls.Add(txtTransactionRef);
-
-            btnProcessCheckOut = new Button
-            {
-                Text = "Process Check-Out",
-                Location = new Point(20, yPos + 60),
-                Size = new Size(620, 45),
-                BackColor = Color.FromArgb(34, 197, 94),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                FlatStyle = FlatStyle.Flat
-            };
-            btnProcessCheckOut.FlatAppearance.BorderSize = 0;
             btnProcessCheckOut.Click += BtnProcessCheckOut_Click;
-            panelCheckOutDetails.Controls.Add(btnProcessCheckOut);
         }
 
-        private void CreateDetailRow(Panel parent, string label, out Label valueLabel, int x, int y)
+        private void TxtExtra_TextChanged(object? sender, EventArgs e)
         {
-            var lbl = new Label
-            {
-                Text = label,
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.FromArgb(100, 116, 139),
-                Location = new Point(x, y),
-                Size = new Size(150, 20)
-            };
-            parent.Controls.Add(lbl);
+            // Parse the extra value
+            decimal extra = 0;
+            if (!string.IsNullOrWhiteSpace(txtExtra.Text) && decimal.TryParse(txtExtra.Text, out var val))
+                extra = val;
 
-            valueLabel = new Label
-            {
-                Text = "",
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                ForeColor = Color.FromArgb(30, 41, 59),
-                Location = new Point(x + 155, y),
-                Size = new Size(450, 20)
-            };
-            parent.Controls.Add(valueLabel);
+            // Recompute and update the total amount label
+            decimal displayTotal = totalAmount + extra;
+            lblTotalAmount.Text = displayTotal.ToString("C2", _currencyCulture);
         }
 
         private void LoadActiveCheckIns(string searchTerm = "")
@@ -270,12 +157,16 @@ namespace HotelMgt.UserControls.Employee
                 using var conn = _dbService.GetConnection();
                 conn.Open();
 
-                // Show ALL active check-ins (ActualCheckOutDateTime is null) without filtering by room status.
                 string query = @"
                     SELECT 
                         ci.CheckInID AS CheckInId,
                         rm.RoomNumber,
-                        g.FirstName + ' ' + g.LastName AS GuestName,
+                        g.FirstName,
+                        g.MiddleName,
+                        g.LastName,
+                        (g.FirstName + ' ' + ISNULL(NULLIF(g.MiddleName, ''), '') + 
+                         CASE WHEN g.MiddleName IS NOT NULL AND g.MiddleName <> '' THEN ' ' ELSE '' END +
+                         g.LastName) AS GuestName,
                         CAST(ci.CheckInDateTime AS DATE) AS CheckInDate,
                         ci.ExpectedCheckOutDate,
                         ci.NumberOfGuests,
@@ -287,7 +178,15 @@ namespace HotelMgt.UserControls.Employee
 
                 if (!string.IsNullOrWhiteSpace(searchTerm))
                 {
-                    query += @" AND (rm.RoomNumber LIKE @Search OR g.FirstName + ' ' + g.LastName LIKE @Search)";
+                    query += @" AND (
+                        rm.RoomNumber LIKE @Search OR
+                        g.FirstName LIKE @Search OR
+                        g.MiddleName LIKE @Search OR
+                        g.LastName LIKE @Search OR
+                        (g.FirstName + ' ' + ISNULL(NULLIF(g.MiddleName, ''), '') + 
+                         CASE WHEN g.MiddleName IS NOT NULL AND g.MiddleName <> '' THEN ' ' ELSE '' END +
+                         g.LastName) LIKE @Search
+                    )";
                 }
 
                 query += " ORDER BY ci.CheckInDateTime DESC";
@@ -302,26 +201,38 @@ namespace HotelMgt.UserControls.Employee
 
                 dgvActiveCheckIns.DataSource = dt;
 
-                if (dgvActiveCheckIns.Columns.Contains("CheckInId"))
-                    dgvActiveCheckIns.Columns["CheckInId"].Visible = false;
-                if (dgvActiveCheckIns.Columns.Contains("RoomNumber"))
-                    dgvActiveCheckIns.Columns["RoomNumber"].HeaderText = "Room";
-                if (dgvActiveCheckIns.Columns.Contains("GuestName"))
-                    dgvActiveCheckIns.Columns["GuestName"].HeaderText = "Guest Name";
-                if (dgvActiveCheckIns.Columns.Contains("CheckInDate"))
-                    dgvActiveCheckIns.Columns["CheckInDate"].HeaderText = "Check-In";
-                if (dgvActiveCheckIns.Columns.Contains("ExpectedCheckOutDate"))
-                    dgvActiveCheckIns.Columns["ExpectedCheckOutDate"].HeaderText = "Expected Out";
-                if (dgvActiveCheckIns.Columns.Contains("NumberOfGuests"))
-                    dgvActiveCheckIns.Columns["NumberOfGuests"].HeaderText = "Guests";
-                if (dgvActiveCheckIns.Columns.Contains("PricePerNight"))
+                var cols = dgvActiveCheckIns.Columns;
+
+                if (cols["CheckInId"] is { } colId)
+                    colId.Visible = false;
+
+                if (cols["RoomNumber"] is { } colRoom)
+                    colRoom.HeaderText = "Room";
+
+                if (cols["GuestName"] is { } colGuest)
+                    colGuest.HeaderText = "Guest Name";
+
+                // Optionally hide the individual name columns if you don't want to show them
+                if (cols["FirstName"] is { } colFirst) colFirst.Visible = false;
+                if (cols["MiddleName"] is { } colMiddle) colMiddle.Visible = false;
+                if (cols["LastName"] is { } colLast) colLast.Visible = false;
+
+                if (cols["CheckInDate"] is { } colIn)
+                    colIn.HeaderText = "Check-In";
+
+                if (cols["ExpectedCheckOutDate"] is { } colExpected)
+                    colExpected.HeaderText = "Expected Out";
+
+                if (cols["NumberOfGuests"] is { } colGuests)
+                    colGuests.HeaderText = "Guests";
+
+                if (cols["PricePerNight"] is { } colPrice)
                 {
-                    dgvActiveCheckIns.Columns["PricePerNight"].HeaderText = "Rate/Night";
-                    dgvActiveCheckIns.Columns["PricePerNight"].DefaultCellStyle.Format = "C2";
-                    dgvActiveCheckIns.Columns["PricePerNight"].DefaultCellStyle.FormatProvider = _currencyCulture;
+                    colPrice.HeaderText = "Rate/Night";
+                    colPrice.DefaultCellStyle.Format = "C2";
+                    colPrice.DefaultCellStyle.FormatProvider = _currencyCulture;
                 }
 
-                // Ensure currency provider applies to all cells that use "C"
                 dgvActiveCheckIns.DefaultCellStyle.FormatProvider = _currencyCulture;
             }
             catch (Exception ex)
@@ -349,7 +260,6 @@ namespace HotelMgt.UserControls.Employee
 
             DateTime checkInDate = Convert.ToDateTime(row.Cells["CheckInDate"].Value).Date;
 
-            // Expected from DB (can be empty/null, handle gracefully)
             DateTime? expectedCheckOutDate = null;
             var expectedOutCell = row.Cells["ExpectedCheckOutDate"]?.Value;
             if (expectedOutCell is not null && expectedOutCell != DBNull.Value)
@@ -357,15 +267,19 @@ namespace HotelMgt.UserControls.Employee
                 expectedCheckOutDate = Convert.ToDateTime(expectedOutCell).Date;
             }
 
-            // Actual (today)
             DateTime checkOutDate = DateTime.Today;
 
             decimal ratePerNight = Convert.ToDecimal(row.Cells["PricePerNight"].Value);
 
-            // Nights = actual stay: today - check-in; minimum 1
             int nightsStayed = Math.Max(1, (checkOutDate - checkInDate).Days);
 
-            totalAmount = nightsStayed * ratePerNight;
+            // Room charges
+            var roomTotal = nightsStayed * ratePerNight;
+
+            // Load amenities and compute total (also fills description)
+            var amenitiesTotal = LoadAmenitiesForCheckIn(selectedCheckInId);
+
+            totalAmount = roomTotal + amenitiesTotal;
 
             lblGuestName.Text = guestName;
             lblRoomInfo.Text = $"Room {roomNumber}";
@@ -375,8 +289,89 @@ namespace HotelMgt.UserControls.Employee
             lblNights.Text = nightsStayed.ToString();
             lblRatePerNight.Text = ratePerNight.ToString("C2", _currencyCulture);
             lblTotalAmount.Text = totalAmount.ToString("C2", _currencyCulture);
+            TxtExtra_TextChanged(null, EventArgs.Empty);
 
             panelCheckOutDetails.Visible = true;
+        }
+
+        // Retrieves amenities for the given CheckIn, binds grid, sets description; returns total amenities cost
+        private decimal LoadAmenitiesForCheckIn(int checkInId)
+        {
+            if (dgvAmenities == null) return 0m;
+
+            try
+            {
+                using var conn = _dbService.GetConnection();
+                conn.Open();
+
+                // 1) Amenities
+                const string sql = @"
+SELECT 
+    cia.AmenityID,
+    a.Category,
+    a.Name,
+    cia.Quantity,
+    cia.UnitPrice,
+    (cia.Quantity * cia.UnitPrice) AS LineTotal
+FROM CheckInAmenities cia
+INNER JOIN Amenities a ON a.AmenityID = cia.AmenityID
+WHERE cia.CheckInID = @CheckInID
+ORDER BY a.Category, a.Name;";
+
+                using var cmd = new SqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("@CheckInID", checkInId);
+
+                using var adapter = new SqlDataAdapter(cmd);
+                var dt = new DataTable();
+                adapter.Fill(dt);
+
+                dgvAmenities.DataSource = dt;
+
+                var cols = dgvAmenities.Columns;
+                if (cols["AmenityID"] is { } cId) cId.Visible = false;
+                if (cols["Category"] is { } cCat) cCat.HeaderText = "Category";
+                if (cols["Name"] is { } cName) cName.HeaderText = "Amenity";
+                if (cols["Quantity"] is { } cQty) cQty.HeaderText = "Qty";
+                if (cols["UnitPrice"] is { } cPrice)
+                {
+                    cPrice.HeaderText = "Unit Price";
+                    cPrice.DefaultCellStyle.Format = "C2";
+                    cPrice.DefaultCellStyle.FormatProvider = _currencyCulture;
+                }
+                if (cols["LineTotal"] is { } cTotal)
+                {
+                    cTotal.HeaderText = "Total";
+                    cTotal.DefaultCellStyle.Format = "C2";
+                    cTotal.DefaultCellStyle.FormatProvider = _currencyCulture;
+                }
+
+                decimal sum = 0m;
+                foreach (DataRow dr in dt.Rows)
+                {
+                    if (dr["LineTotal"] != DBNull.Value)
+                        sum += Convert.ToDecimal(dr["LineTotal"]);
+                }
+
+                // 2) Description (Notes on CheckIns)
+                if (txtCheckInDescription != null)
+                {
+                    using var descCmd = new SqlCommand("SELECT Notes FROM CheckIns WHERE CheckInID = @Id;", conn);
+                    descCmd.Parameters.AddWithValue("@Id", checkInId);
+                    var notesObj = descCmd.ExecuteScalar();
+                    string notes = notesObj == DBNull.Value || notesObj == null ? "" : Convert.ToString(notesObj) ?? "";
+                    txtCheckInDescription.Text = string.IsNullOrWhiteSpace(notes)
+                        ? "No extra(s)."
+                        : notes;
+                }
+
+                return sum;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error loading amenities/description: {ex.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return 0m;
+            }
         }
 
         private void BtnProcessCheckOut_Click(object? sender, EventArgs e)
@@ -395,8 +390,25 @@ namespace HotelMgt.UserControls.Employee
                 return;
             }
 
+            var method = cboPaymentMethod.SelectedItem?.ToString() ?? "Cash";
+            if (!string.Equals(method, "Cash", StringComparison.OrdinalIgnoreCase) &&
+                string.IsNullOrWhiteSpace(txtTransactionRef.Text))
+            {
+                MessageBox.Show("Please enter a transaction reference for non-cash payments.", "Validation",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtTransactionRef.Focus();
+                return;
+            }
+
+            // Parse extra value
+            decimal extra = 0;
+            if (!string.IsNullOrWhiteSpace(txtExtra.Text) && decimal.TryParse(txtExtra.Text, out var val))
+                extra = val;
+
+            decimal finalTotal = totalAmount + extra;
+
             var confirm = MessageBox.Show(
-                $"Process check-out with payment of {totalAmount.ToString("C2", _currencyCulture)}?",
+                $"Process check-out with payment of {finalTotal.ToString("C2", _currencyCulture)}?",
                 "Confirm Check-Out",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question
@@ -411,8 +423,8 @@ namespace HotelMgt.UserControls.Employee
 
                 try
                 {
-                    // Fetch needed data from CheckIns for Payments insert
-                    int roomId, reservationId, guestId;
+                    int roomId, guestId;
+                    int? reservationId;
                     using (var cmd = new SqlCommand(
                         "SELECT RoomId, ReservationID, GuestID FROM CheckIns WHERE CheckInId = @Id", conn, tx))
                     {
@@ -422,11 +434,10 @@ namespace HotelMgt.UserControls.Employee
                             throw new InvalidOperationException("Selected check-in not found.");
 
                         roomId = rdr.GetInt32(0);
-                        reservationId = rdr.GetInt32(1);
+                        reservationId = rdr.IsDBNull(1) ? (int?)null : rdr.GetInt32(1);
                         guestId = rdr.GetInt32(2);
                     }
 
-                    // Mark check-out
                     using (var cmd = new SqlCommand(@"
                         UPDATE CheckIns 
                         SET ActualCheckOutDateTime = @Out
@@ -437,23 +448,21 @@ namespace HotelMgt.UserControls.Employee
                         cmd.ExecuteNonQuery();
                     }
 
-                    // Insert payment (aligns with Payments schema)
                     using (var cmd = new SqlCommand(@"
                         INSERT INTO Payments (ReservationID, GuestID, EmployeeID, PaymentDate, Amount, PaymentMethod, TransactionReference)
                         VALUES (@ReservationID, @GuestID, @EmployeeID, @PaymentDate, @Amount, @PaymentMethod, @TransactionReference)", conn, tx))
                     {
-                        cmd.Parameters.AddWithValue("@ReservationID", reservationId);
+                        cmd.Parameters.AddWithValue("@ReservationID", (object?)reservationId ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("@GuestID", guestId);
                         cmd.Parameters.AddWithValue("@EmployeeID", CurrentUser.EmployeeId);
                         cmd.Parameters.AddWithValue("@PaymentDate", DateTime.Now);
-                        cmd.Parameters.AddWithValue("@Amount", totalAmount);
-                        cmd.Parameters.AddWithValue("@PaymentMethod", cboPaymentMethod.SelectedItem!.ToString());
+                        cmd.Parameters.AddWithValue("@Amount", finalTotal); // <-- Use finalTotal here
+                        cmd.Parameters.AddWithValue("@PaymentMethod", method);
                         cmd.Parameters.AddWithValue("@TransactionReference",
                             string.IsNullOrWhiteSpace(txtTransactionRef.Text) ? (object)DBNull.Value : txtTransactionRef.Text.Trim());
                         cmd.ExecuteNonQuery();
                     }
 
-                    // Make room Available after checkout (valid per CHECK constraint)
                     using (var cmd = new SqlCommand(@"
                         UPDATE Rooms SET Status = 'Available', UpdatedAt = @Now
                         WHERE RoomId = @RoomId", conn, tx))
@@ -471,7 +480,6 @@ namespace HotelMgt.UserControls.Employee
                     throw;
                 }
 
-                // Log activity after successful commit
                 try
                 {
                     _logService.LogActivity(
@@ -481,7 +489,7 @@ namespace HotelMgt.UserControls.Employee
                         selectedCheckInId
                     );
                 }
-                catch { /* don't block UX on log failure */ }
+                catch { }
 
                 MessageBox.Show(
                     $"Check-out processed successfully!\nTotal payment: {totalAmount.ToString("C2", _currencyCulture)}",

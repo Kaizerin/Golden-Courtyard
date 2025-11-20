@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using System.Diagnostics.CodeAnalysis;
 
 namespace HotelMgt.Custom
 {
@@ -83,12 +84,13 @@ namespace HotelMgt.Custom
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Visible)]
         [Category("Appearance")]
         [Description("The text associated with the control.")]
+        [AllowNull]
         public override string Text
         {
             get => textBox1.Text;
             set
             {
-                textBox1.Text = value;
+                textBox1.Text = value ?? string.Empty;
                 Invalidate();
             }
         }
@@ -123,14 +125,15 @@ namespace HotelMgt.Custom
             }
         }
 
+        [AllowNull]
         public override Font Font
         {
             get => base.Font;
             set
             {
-                base.Font = value;
-                textBox1.Font = value;
-                placeholderLabel.Font = value;
+                base.Font = value ?? base.Font;
+                textBox1.Font = value ?? textBox1.Font;
+                placeholderLabel.Font = value ?? placeholderLabel.Font;
                 if (DesignMode)
                     UpdateControlHeight();
             }
@@ -250,7 +253,7 @@ namespace HotelMgt.Custom
 
                 using (GraphicsPath pathBorderSmooth = GetFigurePath(rectBorderSmooth, borderRadius))
                 using (GraphicsPath pathBorder = GetFigurePath(rectBorder, borderRadius - borderSize))
-                using (Pen penBorderSmooth = new Pen(Parent.BackColor, smoothSize))
+                using (Pen penBorderSmooth = new Pen(Parent?.BackColor ?? BackColor, smoothSize))
                 using (Pen penBorder = new Pen(isFocused ? borderFocusColor : borderColor, borderSize))
                 {
                     Region = new Region(pathBorderSmooth);

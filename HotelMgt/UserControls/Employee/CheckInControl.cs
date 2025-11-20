@@ -1,11 +1,9 @@
-﻿using System;
-using System.Data;
-using Microsoft.Data.SqlClient; // Use Microsoft.Data.SqlClient only
-using System.Drawing;
-using System.Windows.Forms;
-using HotelMgt.Models;
+﻿using HotelMgt.otherUI; // Add for AmenitiesPanel
 using HotelMgt.Services;
+using HotelMgt.UIStyles;
 using HotelMgt.Utilities;
+using Microsoft.Data.SqlClient;
+using System.Text.RegularExpressions;
 
 namespace HotelMgt.UserControls.Employee
 {
@@ -13,486 +11,414 @@ namespace HotelMgt.UserControls.Employee
     {
         private readonly DatabaseService _dbService;
         private readonly ActivityLogService _logService;
+        private readonly GuestService _guestService = new GuestService();
+
+        private TabControl tabCheckInRoot = null!;
 
         // Walk-In Controls
-        private TextBox txtFirstName;
-        private TextBox txtLastName;
-        private TextBox txtEmail;
-        private TextBox txtPhone;
-        private ComboBox cboIDType;
-        private TextBox txtIDNumber;
-        private ComboBox cboRoom;
-        private NumericUpDown numGuests;
-        private DateTimePicker dtpCheckOut;
-        private TextBox txtNotes;
-        private Button btnCheckIn;
+        private TextBox txtFirstName = null!;
+        private TextBox txtMiddleName = null!;
+        private TextBox txtLastName = null!;
+        private TextBox txtEmail = null!;
+        private TextBox txtPhone = null!;
+        private ComboBox cboIDType = null!;
+        private TextBox txtIDNumber = null!;
+        private ComboBox cboRoom = null!;
+        private NumericUpDown numGuests = null!;
+        private DateTimePicker dtpCheckOut = null!;
+        private TextBox txtNotes = null!;
+        private Button btnCheckIn = null!;
+        private Label? lblNoAvailableRooms;
 
         // Reservation Controls
-        private ComboBox cboReservation;
-        private Panel panelReservationDetails;
-        private Label lblResGuestName;
-        private Label lblResRoomNumber;
-        private Label lblResCheckIn;
-        private Label lblResCheckOut;
-        private Label lblResGuests;
-        private Label lblResTotal;
-        private Label lblResSpecialRequests;
-        private Button btnCheckInReservation;
-
-        // NEW: Inline info when no reservations exist (instead of MessageBox)
+        private ComboBox cboReservation = null!; // legacy (hidden)
+        private Panel panelReservationDetails = null!;
+        private Label lblResGuestName = null!;
+        private Label lblResRoomNumber = null!;
+        private Label lblResCheckIn = null!;
+        private Label lblResCheckOut = null!;
+        private Label lblResGuests = null!;
+        private Label lblResTotal = null!;
+        private Label lblResSpecialRequests = null!;
+        private Button btnCheckInReservation = null!;
         private Label? lblNoPendingReservations;
+        private Button? btnCancelReservation;
 
-        // NEW: Inline info when no rooms are available (Walk‑In)
-        private Label? lblNoAvailableRooms;
+        // Code lookup
+        private TextBox txtReservationCodeLookup = null!;
+        private Button btnLookupReservation = null!;
+
+        // AmenitiesPanel (new, replaces all local amenities logic)
+        private AmenitiesPanel amenitiesPanel = null!;
+
+        // Current reservation
+        private SelectedReservation? _currentReservation;
+
+        private sealed class SelectedReservation
+        {
+            public int ReservationId { get; init; }
+            public int RoomId { get; init; }
+            public int GuestId { get; init; }
+            public string GuestName { get; init; } = "";
+            public string RoomNumber { get; init; } = "";
+            public DateTime CheckInDate { get; init; }
+            public DateTime CheckOutDate { get; init; }
+            public int NumberOfGuests { get; init; }
+            public decimal TotalAmount { get; init; }
+            public string SpecialRequests { get; init; } = "";
+        }
 
         public CheckInControl()
         {
             InitializeComponent();
             _dbService = new DatabaseService();
             _logService = new ActivityLogService();
-
-            InitializeCustomControls();
-
-            // Ensure the Load handler runs so tabs get populated
-            this.Load += CheckInControl_Load;
+            Load += CheckInControl_Load;
         }
 
-        private void InitializeCustomControls()
+        private void CheckInControl_Load(object? sender, EventArgs e)
         {
-            // This will be called after InitializeComponent()
-            // Create all controls programmatically or use designer
+            CheckInViewBuilder.Build(
+                this,
+                out var builtTab,
+                out txtFirstName, out txtMiddleName, out txtLastName, out txtEmail, out txtPhone,
+                out cboIDType, out txtIDNumber, out cboRoom, out numGuests, out dtpCheckOut,
+                out txtNotes, out btnCheckIn, out var noRoomsLbl,
+                out cboReservation, out panelReservationDetails,
+                out lblResGuestName, out lblResRoomNumber, out lblResCheckIn, out lblResCheckOut,
+                out lblResGuests, out lblResTotal, out lblResSpecialRequests, out btnCheckInReservation,
+                out txtReservationCodeLookup, out btnLookupReservation,
+                out var noResLbl,
+                out amenitiesPanel // NEW: get AmenitiesPanel from builder
+            );
 
-            // Ensure the TabControl fills the user control
-            if (tabCheckInType != null)
+            tabCheckInRoot = builtTab;
+            lblNoAvailableRooms = noRoomsLbl;
+            lblNoPendingReservations = noResLbl;
+
+            // Walk-In
+            btnCheckIn.Click += BtnCheckIn_Click;
+
+            // Reservation lookup
+            btnLookupReservation.Click += (_, __) => LookupReservationByCode();
+            txtReservationCodeLookup.KeyDown += (_, ke) =>
             {
-                tabCheckInType.Dock = DockStyle.Fill;
-                tabCheckInType.TabPages.Clear();
+                if (ke.KeyCode == Keys.Enter)
+                {
+                    ke.SuppressKeyPress = true;
+                    LookupReservationByCode();
+                }
+            };
 
-                TabPage walkInTab = new TabPage("Walk-In");
-                TabPage reservationTab = new TabPage("Reservation");
-                tabCheckInType.TabPages.Add(walkInTab);
-                tabCheckInType.TabPages.Add(reservationTab);
+            // Reservation actions
+            btnCheckInReservation.Click += BtnCheckInReservation_Click;
+            var cancelBtn = Controls.Find("btnCancelReservation", true).OfType<Button>().FirstOrDefault();
+            if (cancelBtn != null)
+            {
+                btnCancelReservation = cancelBtn;
+                btnCancelReservation.Click += BtnCancelReservation_Click;
+            }
+
+            LoadAvailableRooms();
+            UpdateReservationActionState();
+        }
+
+        #region Reservation Lookup / Actions
+
+        private void LookupReservationByCode()
+        {
+            var code = txtReservationCodeLookup.Text.Trim();
+            if (string.IsNullOrWhiteSpace(code))
+            {
+                MessageBox.Show("Please enter a reservation code.", "Validation",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtReservationCodeLookup.Focus();
+                return;
+            }
+
+            try
+            {
+                using var conn = _dbService.GetConnection();
+                conn.Open();
+
+                const string sql = @"
+SELECT TOP 1 
+    r.ReservationID,
+    r.RoomID,
+    r.GuestID,
+    g.FirstName,
+    g.MiddleName,
+    g.LastName,
+    (g.FirstName + ' ' + 
+     ISNULL(NULLIF(g.MiddleName, ''), '') + 
+     CASE WHEN g.MiddleName IS NOT NULL AND g.MiddleName <> '' THEN ' ' ELSE '' END +
+     g.LastName) AS GuestName,
+    rm.RoomNumber,
+    r.CheckInDate,
+    r.CheckOutDate,
+    r.NumberOfGuests,
+    r.TotalAmount,
+    r.SpecialRequests
+FROM Reservations r
+INNER JOIN Guests g ON r.GuestID = g.GuestID
+INNER JOIN Rooms rm ON r.RoomID = rm.RoomID
+WHERE r.ReservationCode = @Code
+  AND r.ReservationStatus = 'Confirmed'
+  AND NOT EXISTS (
+        SELECT 1 FROM CheckIns ci
+        WHERE ci.ReservationID = r.ReservationID
+          AND ci.ActualCheckOutDateTime IS NULL
+  );";
+
+                using var cmd = new SqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("@Code", code);
+
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    _currentReservation = new SelectedReservation
+                    {
+                        ReservationId = reader.GetInt32(0),
+                        RoomId = reader.GetInt32(1),
+                        GuestId = reader.GetInt32(2),
+                        // Optionally store FirstName, MiddleName, LastName if you want
+                        GuestName = reader.GetString(6), // Use the concatenated GuestName
+                        RoomNumber = reader.GetString(7),
+                        CheckInDate = reader.GetDateTime(8),
+                        CheckOutDate = reader.GetDateTime(9),
+                        NumberOfGuests = reader.GetInt32(10),
+                        TotalAmount = reader.GetDecimal(11),
+                        SpecialRequests = reader.IsDBNull(12) ? "" : reader.GetString(12)
+                    };
+
+                    lblResGuestName.Text = $"Guest: {_currentReservation.GuestName}";
+                    lblResRoomNumber.Text = $"Room: {_currentReservation.RoomNumber}";
+                    lblResCheckIn.Text = $"Check-In: {_currentReservation.CheckInDate:yyyy-MM-dd}";
+                    lblResCheckOut.Text = $"Check-Out: {_currentReservation.CheckOutDate:yyyy-MM-dd}";
+                    lblResGuests.Text = $"Guests: {_currentReservation.NumberOfGuests}";
+                    lblResTotal.Text = $"Total: PHP {_currentReservation.TotalAmount:#,0.00}";
+                    lblResSpecialRequests.Text = $"Extra Request: {(string.IsNullOrWhiteSpace(_currentReservation.SpecialRequests) ? "None" : _currentReservation.SpecialRequests)}";
+
+                    panelReservationDetails.Visible = true;
+                    if (lblNoPendingReservations != null) lblNoPendingReservations.Visible = false;
+                }
+                else
+                {
+                    _currentReservation = null;
+                    panelReservationDetails.Visible = false;
+                    if (lblNoPendingReservations != null)
+                    {
+                        lblNoPendingReservations.Text = "No confirmed reservation found for that code (or already checked in).";
+                        lblNoPendingReservations.Visible = true;
+                    }
+                    MessageBox.Show("No confirmed reservation found for that code (or already checked in).",
+                        "Not Found", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+
+                UpdateReservationActionState();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error looking up reservation: {ex.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private void CheckInControl_Load(object sender, EventArgs e)
+        private void BtnCheckInReservation_Click(object? sender, EventArgs e)
         {
-            // Guard if the TabControl wasn't created by designer for some reason
-            if (tabCheckInType == null || tabCheckInType.TabPages.Count < 2)
+            if (_currentReservation is null)
+            {
+                MessageBox.Show("Lookup a confirmed reservation first.", "No Reservation",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
+            }
 
-            InitializeWalkInTab();
-            InitializeReservationTab();
-            LoadAvailableRooms();
-            LoadPendingReservations();
+            // Use AmenitiesPanel for selected amenities
+            var selectedAmenities = amenitiesPanel.GetSelectedAmenities();
+
+            try
+            {
+                using var conn = _dbService.GetConnection();
+                conn.Open();
+                using var transaction = conn.BeginTransaction();
+
+                try
+                {
+                    // Update reservation status
+                    const string updateQuery = @"
+UPDATE Reservations
+SET ReservationStatus = 'CheckedIn', EmployeeID = @EmployeeId, UpdatedAt = @Now
+WHERE ReservationID = @ReservationId";
+                    using (var cmd = new SqlCommand(updateQuery, conn, transaction))
+                    {
+                        cmd.Parameters.AddWithValue("@EmployeeId", CurrentUser.EmployeeId);
+                        cmd.Parameters.AddWithValue("@Now", DateTime.Now);
+                        cmd.Parameters.AddWithValue("@ReservationId", _currentReservation.ReservationId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    // Insert CheckIn
+                    const string insertCheckIn = @"
+INSERT INTO CheckIns
+(ReservationID, GuestID, RoomID, EmployeeID, CheckInDateTime, ExpectedCheckOutDate, NumberOfGuests, Notes, CreatedAt)
+VALUES
+(@ReservationID, @GuestID, @RoomID, @EmployeeID, @CheckInDateTime, @ExpectedCheckOutDate, @NumberOfGuests, @Notes, @CreatedAt);
+SELECT CAST(SCOPE_IDENTITY() AS INT);";
+
+                    int checkInId;
+                    using (var cmd = new SqlCommand(insertCheckIn, conn, transaction))
+                    {
+                        cmd.Parameters.AddWithValue("@ReservationID", _currentReservation.ReservationId);
+                        cmd.Parameters.AddWithValue("@GuestID", _currentReservation.GuestId);
+                        cmd.Parameters.AddWithValue("@RoomID", _currentReservation.RoomId);
+                        cmd.Parameters.AddWithValue("@EmployeeID", CurrentUser.EmployeeId);
+                        cmd.Parameters.AddWithValue("@CheckInDateTime", DateTime.Now);
+                        cmd.Parameters.AddWithValue("@ExpectedCheckOutDate", _currentReservation.CheckOutDate);
+                        cmd.Parameters.AddWithValue("@NumberOfGuests", _currentReservation.NumberOfGuests);
+                        cmd.Parameters.AddWithValue("@Notes",
+                            string.IsNullOrWhiteSpace(_currentReservation.SpecialRequests)
+                                ? (object)DBNull.Value
+                                : _currentReservation.SpecialRequests);
+                        cmd.Parameters.AddWithValue("@CreatedAt", DateTime.Now);
+                        checkInId = (int)cmd.ExecuteScalar()!;
+                    }
+
+                    if (selectedAmenities.Count > 0)
+                        InsertCheckInAmenities(conn, transaction, checkInId, selectedAmenities);
+
+                    UpdateRoomStatus(conn, transaction, _currentReservation.RoomId, "Occupied");
+
+                    transaction.Commit();
+
+                    try
+                    {
+                        _logService.LogActivity(
+                            CurrentUser.EmployeeId,
+                            "CheckIn",
+                            $"Guest {_currentReservation.GuestName} checked into Room {_currentReservation.RoomNumber} (Reservation)",
+                            checkInId);
+                    }
+                    catch { /* non-blocking */ }
+
+                    MessageBox.Show(
+                        $"Guest {_currentReservation.GuestName} successfully checked in to Room {_currentReservation.RoomNumber}!",
+                        "Check-In Successful", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                    _currentReservation = null;
+                    panelReservationDetails.Visible = false;
+                    txtReservationCodeLookup.Clear();
+                    UpdateReservationActionState();
+                    LoadAvailableRooms();
+                }
+                catch (Exception exInner)
+                {
+                    try { transaction.Rollback(); } catch { }
+                    MessageBox.Show($"Error during reservation check-in: {exInner.Message}", "Error",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            catch (Exception exOuter)
+            {
+                MessageBox.Show($"Error: {exOuter.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
-        #region Walk-In Tab Initialization
-
-        private void InitializeWalkInTab()
+        private void BtnCancelReservation_Click(object? sender, EventArgs e)
         {
-            var walkInTab = tabCheckInType.TabPages[0];
-            walkInTab.BackColor = Color.White;
-            walkInTab.AutoScroll = true;
-
-            // Container Panel
-            Panel container = new Panel
+            if (_currentReservation is null)
             {
-                Location = new Point(20, 20),
-                Size = new Size(1100, 550),
-                AutoScroll = true,
-                BackColor = Color.White
-            };
-            walkInTab.Controls.Clear();
-            walkInTab.Controls.Add(container);
+                MessageBox.Show("Lookup a confirmed reservation first.", "No Reservation",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
 
-            int yPos = 10;
+            var confirm = MessageBox.Show(
+                $"Cancel reservation for {_currentReservation.GuestName} - Room {_currentReservation.RoomNumber} on {_currentReservation.CheckInDate:yyyy-MM-dd}?",
+                "Confirm Cancel", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
 
-            // Guest Information Section
-            Label lblGuestInfo = CreateSectionLabel("Guest Information", 10, yPos);
-            container.Controls.Add(lblGuestInfo);
-            yPos += 40;
+            if (confirm != DialogResult.Yes) return;
 
-            // First Name
-            Label lblFirstName = new Label
+            try
             {
-                Text = "First Name *",
-                Location = new Point(10, yPos),
-                Size = new Size(100, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblFirstName);
+                using var conn = _dbService.GetConnection();
+                conn.Open();
+                using var tx = conn.BeginTransaction();
 
-            txtFirstName = new TextBox
+                try
+                {
+                    const string sql = @"
+UPDATE Reservations
+SET ReservationStatus = 'Cancelled', EmployeeID = @EmployeeId, UpdatedAt = @Now
+WHERE ReservationID = @ReservationId;";
+                    using (var cmd = new SqlCommand(sql, conn, tx))
+                    {
+                        cmd.Parameters.AddWithValue("@EmployeeId", CurrentUser.EmployeeId);
+                        cmd.Parameters.AddWithValue("@Now", DateTime.Now);
+                        cmd.Parameters.AddWithValue("@ReservationId", _currentReservation.ReservationId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    tx.Commit();
+
+                    try
+                    {
+                        _logService.LogActivity(
+                            CurrentUser.EmployeeId,
+                            "CancelReservation",
+                            $"Cancelled reservation {_currentReservation.ReservationId} for {_currentReservation.GuestName} (Room {_currentReservation.RoomNumber})",
+                            _currentReservation.ReservationId);
+                    }
+                    catch { }
+
+                    MessageBox.Show("Reservation cancelled.", "Cancelled",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                    _currentReservation = null;
+                    panelReservationDetails.Visible = false;
+                    txtReservationCodeLookup.Clear();
+                    UpdateReservationActionState();
+                    LoadAvailableRooms();
+                }
+                catch (Exception exInner)
+                {
+                    try { tx.Rollback(); } catch { }
+                    MessageBox.Show($"Error cancelling reservation: {exInner.Message}", "Error",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            catch (Exception ex)
             {
-                Location = new Point(10, yPos + 22),
-                Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 10)
-            };
-            container.Controls.Add(txtFirstName);
+                MessageBox.Show($"Error: {ex.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
 
-            // Last Name
-            Label lblLastName = new Label
+        private void UpdateReservationActionState()
+        {
+            bool hasSelection = _currentReservation != null;
+
+            var activeBlue = Color.FromArgb(37, 99, 235);
+            var activeRed = Color.FromArgb(220, 38, 38);
+            var inactive = Color.FromArgb(148, 163, 184);
+
+            btnCheckInReservation.BackColor = hasSelection ? activeBlue : inactive;
+            btnCheckInReservation.ForeColor = Color.White;
+            btnCheckInReservation.Cursor = hasSelection ? Cursors.Hand : Cursors.No;
+            btnCheckInReservation.Enabled = hasSelection;
+
+            if (btnCancelReservation != null)
             {
-                Text = "Last Name *",
-                Location = new Point(280, yPos),
-                Size = new Size(100, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblLastName);
-
-            txtLastName = new TextBox
-            {
-                Location = new Point(280, yPos + 22),
-                Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 10)
-            };
-            container.Controls.Add(txtLastName);
-            yPos += 60;
-
-            // Email
-            Label lblEmail = new Label
-            {
-                Text = "Email",
-                Location = new Point(10, yPos),
-                Size = new Size(100, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblEmail);
-
-            txtEmail = new TextBox
-            {
-                Location = new Point(10, yPos + 22),
-                Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 10)
-            };
-            container.Controls.Add(txtEmail);
-
-            // Phone
-            Label lblPhone = new Label
-            {
-                Text = "Phone Number *",
-                Location = new Point(280, yPos),
-                Size = new Size(120, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblPhone);
-
-            txtPhone = new TextBox
-            {
-                Location = new Point(280, yPos + 22),
-                Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 10)
-            };
-            container.Controls.Add(txtPhone);
-            yPos += 60;
-
-            // ID Type
-            Label lblIDType = new Label
-            {
-                Text = "ID Type *",
-                Location = new Point(10, yPos),
-                Size = new Size(100, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblIDType);
-
-            cboIDType = new ComboBox
-            {
-                Location = new Point(10, yPos + 22),
-                Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 10),
-                DropDownStyle = ComboBoxStyle.DropDownList
-            };
-            cboIDType.Items.AddRange(new object[] { "Passport", "Driver License", "National ID" });
-            container.Controls.Add(cboIDType);
-
-            // ID Number
-            Label lblIDNumber = new Label
-            {
-                Text = "ID Number *",
-                Location = new Point(280, yPos),
-                Size = new Size(100, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblIDNumber);
-
-            txtIDNumber = new TextBox
-            {
-                Location = new Point(280, yPos + 22),
-                Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 10)
-            };
-            container.Controls.Add(txtIDNumber);
-            yPos += 60;
-
-            // Room & Stay Information Section
-            Label lblStayInfo = CreateSectionLabel("Room & Stay Information", 10, yPos);
-            container.Controls.Add(lblStayInfo);
-            yPos += 40;
-
-            // Select Room
-            Label lblRoom = new Label
-            {
-                Text = "Select Room *",
-                Location = new Point(10, yPos),
-                Size = new Size(120, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblRoom);
-
-            cboRoom = new ComboBox
-            {
-                Location = new Point(10, yPos + 22),
-                Size = new Size(520, 25),
-                Font = new Font("Segoe UI", 10),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                DisplayMember = "DisplayText",
-                ValueMember = "RoomId"
-            };
-            container.Controls.Add(cboRoom);
-
-            // NEW: inline info when no rooms are available (hidden by default)
-            lblNoAvailableRooms = new Label
-            {
-                Text = "No rooms available at the moment.",
-                Location = new Point(10, yPos + 25),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 9, FontStyle.Italic),
-                ForeColor = Color.FromArgb(100, 116, 139),
-                Visible = false
-            };
-            container.Controls.Add(lblNoAvailableRooms);
-
-            yPos += 60;
-
-            // Number of Guests
-            Label lblGuests = new Label
-            {
-                Text = "Number of Guests *",
-                Location = new Point(10, yPos),
-                Size = new Size(150, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblGuests);
-
-            numGuests = new NumericUpDown
-            {
-                Location = new Point(10, yPos + 22),
-                Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 10),
-                Minimum = 1,
-                Maximum = 10,
-                Value = 1
-            };
-            container.Controls.Add(numGuests);
-
-            // Check-Out Date
-            Label lblCheckOut = new Label
-            {
-                Text = "Expected Check-Out Date *",
-                Location = new Point(280, yPos),
-                Size = new Size(180, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblCheckOut);
-
-            dtpCheckOut = new DateTimePicker
-            {
-                Location = new Point(280, yPos + 22),
-                Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 10),
-                Format = DateTimePickerFormat.Short,
-                MinDate = DateTime.Today.AddDays(1)
-            };
-            container.Controls.Add(dtpCheckOut);
-            yPos += 60;
-
-            // Notes
-            Label lblNotes = new Label
-            {
-                Text = "Special Requests / Notes",
-                Location = new Point(10, yPos),
-                Size = new Size(200, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblNotes);
-
-            txtNotes = new TextBox
-            {
-                Location = new Point(10, yPos + 22),
-                Size = new Size(520, 60),
-                Font = new Font("Segoe UI", 10),
-                Multiline = true
-            };
-            container.Controls.Add(txtNotes);
-            yPos += 95;
-
-            // Check-In Button
-            btnCheckIn = new Button
-            {
-                Text = "Complete Check-In",
-                Location = new Point(10, yPos),
-                Size = new Size(520, 45),
-                BackColor = Color.FromArgb(37, 99, 235),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                FlatStyle = FlatStyle.Flat,
-                Cursor = Cursors.Hand
-            };
-            btnCheckIn.FlatAppearance.BorderSize = 0;
-            btnCheckIn.Click += BtnCheckIn_Click;
-            container.Controls.Add(btnCheckIn);
+                btnCancelReservation.BackColor = hasSelection ? activeRed : inactive;
+                btnCancelReservation.ForeColor = Color.White;
+                btnCancelReservation.Cursor = hasSelection ? Cursors.Hand : Cursors.No;
+                btnCancelReservation.Enabled = hasSelection;
+            }
         }
 
         #endregion
 
-        #region Reservation Tab Initialization
-
-        private void InitializeReservationTab()
-        {
-            var reservationTab = tabCheckInType.TabPages[1];
-            reservationTab.BackColor = Color.White;
-
-            Panel container = new Panel
-            {
-                Location = new Point(20, 20),
-                Size = new Size(1100, 550),
-                BackColor = Color.White
-            };
-            reservationTab.Controls.Clear();
-            reservationTab.Controls.Add(container);
-
-            // Select Reservation
-            Label lblSelectRes = new Label
-            {
-                Text = "Select Reservation *",
-                Location = new Point(10, 10),
-                Size = new Size(200, 20),
-                Font = new Font("Segoe UI", 9)
-            };
-            container.Controls.Add(lblSelectRes);
-
-            cboReservation = new ComboBox
-            {
-                Location = new Point(10, 35),
-                Size = new Size(700, 25),
-                Font = new Font("Segoe UI", 10),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                DisplayMember = "DisplayText",
-                ValueMember = "ReservationID"
-            };
-            cboReservation.SelectedIndexChanged += CboReservation_SelectedIndexChanged;
-            container.Controls.Add(cboReservation);
-
-            // NEW: info label shown when there are no reservations (hidden by default)
-            lblNoPendingReservations = new Label
-            {
-                Text = "No reservations pending check-in.",
-                Location = new Point(10, 38),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 9, FontStyle.Italic),
-                ForeColor = Color.FromArgb(100, 116, 139),
-                Visible = false
-            };
-            container.Controls.Add(lblNoPendingReservations);
-
-            // Reservation Details Panel
-            panelReservationDetails = new Panel
-            {
-                Location = new Point(10, 80),
-                Size = new Size(700, 350),
-                BackColor = Color.FromArgb(249, 250, 251),
-                BorderStyle = BorderStyle.FixedSingle,
-                Visible = false
-            };
-            container.Controls.Add(panelReservationDetails);
-
-            // Details labels
-            Label lblDetailsTitle = new Label
-            {
-                Text = "Reservation Details",
-                Location = new Point(15, 15),
-                Size = new Size(200, 25),
-                Font = new Font("Segoe UI", 12, FontStyle.Bold)
-            };
-            panelReservationDetails.Controls.Add(lblDetailsTitle);
-
-            int yPos = 50;
-            CreateDetailRow(panelReservationDetails, "Guest:", out lblResGuestName, 15, yPos);
-            yPos += 30;
-            CreateDetailRow(panelReservationDetails, "Room:", out lblResRoomNumber, 15, yPos);
-            yPos += 30;
-            CreateDetailRow(panelReservationDetails, "Check-In Date:", out lblResCheckIn, 15, yPos);
-            yPos += 30;
-            CreateDetailRow(panelReservationDetails, "Check-Out Date:", out lblResCheckOut, 15, yPos);
-            yPos += 30;
-            CreateDetailRow(panelReservationDetails, "Number of Guests:", out lblResGuests, 15, yPos);
-            yPos += 30;
-            CreateDetailRow(panelReservationDetails, "Total Amount:", out lblResTotal, 15, yPos);
-            yPos += 30;
-            CreateDetailRow(panelReservationDetails, "Special Requests:", out lblResSpecialRequests, 15, yPos);
-
-            // Check-In Button for Reservation
-            btnCheckInReservation = new Button
-            {
-                Text = "Complete Check-In",
-                Location = new Point(10, 450),
-                Size = new Size(700, 45),
-                BackColor = Color.FromArgb(37, 99, 235),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                FlatStyle = FlatStyle.Flat,
-                Cursor = Cursors.Hand,
-                Enabled = false
-            };
-            btnCheckInReservation.FlatAppearance.BorderSize = 0;
-            btnCheckInReservation.Click += BtnCheckInReservation_Click;
-            container.Controls.Add(btnCheckInReservation);
-        }
-
-        #endregion
-
-        #region Helper Methods
-
-        private Label CreateSectionLabel(string text, int x, int y)
-        {
-            return new Label
-            {
-                Text = text,
-                Location = new Point(x, y),
-                Size = new Size(400, 25),
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                ForeColor = Color.FromArgb(30, 41, 59)
-            };
-        }
-
-        private void CreateDetailRow(Panel parent, string labelText, out Label valueLabel, int x, int y)
-        {
-            Label label = new Label
-            {
-                Text = labelText,
-                Location = new Point(x, y),
-                Size = new Size(180, 20),
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.FromArgb(100, 116, 139)
-            };
-            parent.Controls.Add(label);
-
-            valueLabel = new Label
-            {
-                Text = "",
-                Location = new Point(x + 185, y),
-                Size = new Size(480, 20),
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                ForeColor = Color.FromArgb(30, 41, 59)
-            };
-            parent.Controls.Add(valueLabel);
-        }
-
-        #endregion
-
-        #region Load Data Methods
+        #region Load Data
 
         private void LoadAvailableRooms()
         {
@@ -500,46 +426,39 @@ namespace HotelMgt.UserControls.Employee
             {
                 cboRoom.Items.Clear();
 
-                using (var conn = _dbService.GetConnection())
+                using var conn = _dbService.GetConnection();
+                conn.Open();
+
+                const string query = @"
+SELECT RoomID, RoomNumber, RoomType, PricePerNight, MaxOccupancy
+FROM Rooms
+WHERE Status = 'Available'
+ORDER BY RoomNumber";
+
+                using var cmd = new SqlCommand(query, conn);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
                 {
-                    conn.Open();
-                    string query = @"
-                        SELECT RoomID, RoomNumber, RoomType, PricePerNight, MaxOccupancy
-                        FROM Rooms
-                        WHERE Status = 'Available'
-                        ORDER BY RoomNumber";
-
-                    using (var cmd = new SqlCommand(query, conn))
-                    using (var reader = cmd.ExecuteReader())
+                    var room = new
                     {
-                        while (reader.Read())
-                        {
-                            var room = new
-                            {
-                                RoomId = reader.GetInt32(0),
-                                RoomNumber = reader.GetString(1),
-                                RoomType = reader.GetString(2),
-                                PricePerNight = reader.GetDecimal(3),
-                                MaxOccupancy = reader.GetInt32(4),
-                                DisplayText = $"Room {reader.GetString(1)} - {reader.GetString(2)} (${reader.GetDecimal(3):F2}/night) - Max {reader.GetInt32(4)} guests"
-                            };
-
-                            cboRoom.Items.Add(room);
-                        }
-                    }
+                        RoomId = reader.GetInt32(0),
+                        RoomNumber = reader.GetString(1),
+                        RoomType = reader.GetString(2),
+                        PricePerNight = reader.GetDecimal(3),
+                        MaxOccupancy = reader.GetInt32(4),
+                        DisplayText =
+                            $"Room {reader.GetString(1)} - {reader.GetString(2)} (PHP {reader.GetDecimal(3):#,0.00}/night) - Max {reader.GetInt32(4)} guests"
+                    };
+                    cboRoom.Items.Add(room);
                 }
 
-                // Inline handling (no MessageBox)
                 bool hasRooms = cboRoom.Items.Count > 0;
-
-                if (lblNoAvailableRooms != null)
-                    lblNoAvailableRooms.Visible = !hasRooms;
+                if (lblNoAvailableRooms != null) lblNoAvailableRooms.Visible = !hasRooms;
 
                 cboRoom.Visible = hasRooms;
                 cboRoom.Enabled = hasRooms;
                 if (!hasRooms) cboRoom.SelectedIndex = -1;
 
-                // Disable/enable dependent inputs
                 numGuests.Enabled = hasRooms;
                 dtpCheckOut.Enabled = hasRooms;
                 txtNotes.Enabled = hasRooms;
@@ -547,332 +466,237 @@ namespace HotelMgt.UserControls.Employee
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    $"Error loading available rooms: {ex.Message}",
-                    "Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
-            }
-        }
-
-        private void LoadPendingReservations()
-        {
-            try
-            {
-                cboReservation.Items.Clear();
-
-                using (var conn = _dbService.GetConnection())
-                {
-                    conn.Open();
-                    string query = @"
-                        SELECT 
-                            r.ReservationID,
-                            r.RoomID,
-                            r.GuestID,
-                            g.FirstName + ' ' + g.LastName AS GuestName,
-                            rm.RoomNumber,
-                            r.CheckInDate,
-                            r.CheckOutDate,
-                            r.NumberOfGuests,
-                            r.TotalAmount,
-                            r.SpecialRequests
-                        FROM Reservations r
-                        INNER JOIN Guests g ON r.GuestID = g.GuestID
-                        INNER JOIN Rooms rm ON r.RoomID = rm.RoomID
-                        WHERE r.ReservationStatus = 'Confirmed'
-                          AND r.CheckInDate <= CAST(GETDATE() AS DATE)
-                          AND r.CheckInDate >= DATEADD(DAY, -1, CAST(GETDATE() AS DATE))
-                        ORDER BY r.CheckInDate";
-
-                    using (var cmd = new SqlCommand(query, conn))
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            var reservation = new
-                            {
-                                ReservationId = reader.GetInt32(0),
-                                RoomId       = reader.GetInt32(1),
-                                GuestId      = reader.GetInt32(2),
-                                GuestName    = reader.GetString(3),
-                                RoomNumber   = reader.GetString(4),
-                                CheckInDate  = reader.GetDateTime(5),
-                                CheckOutDate = reader.GetDateTime(6),
-                                NumberOfGuests = reader.GetInt32(7),
-                                TotalAmount    = reader.GetDecimal(8),
-                                SpecialRequests = reader.IsDBNull(9) ? "" : reader.GetString(9),
-                                DisplayText = $"{reader.GetString(3)} - Room {reader.GetString(4)} - {reader.GetDateTime(5):yyyy-MM-dd}"
-                            };
-
-                            cboReservation.Items.Add(reservation);
-                        }
-                    }
-                }
-
-                // NEW: No MessageBox. Show/Hide inline info and toggle related controls.
-                if (cboReservation.Items.Count == 0)
-                {
-                    if (lblNoPendingReservations != null)
-                        lblNoPendingReservations.Visible = true;
-
-                    cboReservation.Visible = false;
-                    panelReservationDetails.Visible = false;
-                    btnCheckInReservation.Enabled = false;
-                }
-                else
-                {
-                    if (lblNoPendingReservations != null)
-                        lblNoPendingReservations.Visible = false;
-
-                    cboReservation.Visible = true;
-                    cboReservation.Enabled = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    $"Error loading reservations: {ex.Message}",
-                    "Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
+                MessageBox.Show($"Error loading available rooms: {ex.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
         #endregion
 
-        #region Event Handlers
+        #region Event Handlers (Misc)
 
-        private void CboReservation_SelectedIndexChanged(object sender, EventArgs e)
+        private void CboReservation_SelectedIndexChanged(object? sender, EventArgs e)
         {
             if (cboReservation.SelectedItem != null)
             {
                 dynamic reservation = cboReservation.SelectedItem;
-
                 lblResGuestName.Text = reservation.GuestName;
                 lblResRoomNumber.Text = $"Room {reservation.RoomNumber}";
                 lblResCheckIn.Text = ((DateTime)reservation.CheckInDate).ToString("yyyy-MM-dd");
                 lblResCheckOut.Text = ((DateTime)reservation.CheckOutDate).ToString("yyyy-MM-dd");
                 lblResGuests.Text = reservation.NumberOfGuests.ToString();
-                lblResTotal.Text = $"{reservation.TotalAmount:C2}";
+                decimal total = (decimal)reservation.TotalAmount;
+                lblResTotal.Text = $"PHP {total:#,0.00}";
                 lblResSpecialRequests.Text = string.IsNullOrEmpty(reservation.SpecialRequests) ? "None" : reservation.SpecialRequests;
-
                 panelReservationDetails.Visible = true;
-                btnCheckInReservation.Enabled = true;
             }
             else
             {
                 panelReservationDetails.Visible = false;
-                btnCheckInReservation.Enabled = false;
             }
+            UpdateReservationActionState();
         }
 
-        private void BtnCheckIn_Click(object sender, EventArgs e)
+        private void BtnCheckIn_Click(object? sender, EventArgs e)
         {
-            // Walk-In check-in logic
+            SqlTransaction transaction = null!;
             try
             {
-                // Basic validation
-                if (string.IsNullOrWhiteSpace(txtFirstName.Text) ||
-                    string.IsNullOrWhiteSpace(txtLastName.Text) ||
-                    string.IsNullOrWhiteSpace(txtPhone.Text) ||
-                    cboIDType.SelectedItem == null ||
-                    string.IsNullOrWhiteSpace(txtIDNumber.Text) ||
-                    cboRoom.SelectedItem == null ||
-                    numGuests.Value <= 0)
+                if (!ValidateWalkInInputs())
+                    return;
+
+                // Use AmenitiesPanel for selected amenities
+                var selectedAmenities = amenitiesPanel.GetSelectedAmenities();
+
+                using var conn = _dbService.GetConnection();
+                conn.Open();
+                transaction = conn.BeginTransaction();
+
+                string firstName = txtFirstName.Text.Trim();
+                string middleName = txtMiddleName.Text.Trim();
+                string lastName = txtLastName.Text.Trim();
+                string phone = txtPhone.Text.Trim();
+                string email = txtEmail.Text?.Trim() ?? string.Empty;
+                string idType = cboIDType.SelectedItem!.ToString()!;
+                string idNumber = txtIDNumber.Text.Trim();
+
+                // Use the helper, which will only rollback after the reader is disposed
+                var lookup = GuestLookupHelper.LookupOrPromptGuest(
+                    this, conn, transaction,
+                    firstName, middleName, lastName,
+                    (fn, mn, ln, em, ph, idt, idn) =>
+                    {
+                        txtFirstName.Text = fn;
+                        txtMiddleName.Text = mn;
+                        txtLastName.Text = ln;
+                        txtEmail.Text = em;
+                        txtPhone.Text = ph;
+                        cboIDType.SelectedItem = idt;
+                        txtIDNumber.Text = idn;
+                    });
+
+                if (lookup.AbortCheckIn)
+                    return;
+
+                int guestId = lookup.GuestId;
+                if (!lookup.IsExistingGuest)
                 {
-                    MessageBox.Show("Please fill in all required fields.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    guestId = _guestService.EnsureGuest(
+                        conn, transaction,
+                        firstName, middleName, lastName, phone, email, idType, idNumber
+                    );
+                }
+
+                // AFTER guestId is determined
+                if (_guestService.HasActiveReservation(conn, transaction, guestId))
+                {
+                    MessageBox.Show(
+                        "This guest already has a confirmed reservation. Please use the reservation code or ask the front desk for assistance.",
+                        "Active Reservation Found",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                    transaction.Rollback();
                     return;
                 }
 
-                // Proceed with check-in
-                using (var conn = _dbService.GetConnection())
+                int roomId = (int)((dynamic)cboRoom.SelectedItem).RoomId;
+
+                const string insertCheckIn = @"
+                    INSERT INTO CheckIns
+                    (ReservationID, GuestID, RoomID, EmployeeID, CheckInDateTime, ExpectedCheckOutDate, NumberOfGuests, Notes, CreatedAt)
+                    VALUES
+                    (NULL, @GuestID, @RoomID, @EmployeeID, @CheckInDateTime, @ExpectedCheckOutDate, @NumberOfGuests, @Notes, @CreatedAt);
+                    SELECT CAST(SCOPE_IDENTITY() AS INT);";
+
+                int checkInId;
+                using (var cmd = new SqlCommand(insertCheckIn, conn, transaction))
                 {
-                    conn.Open();
-                    using (var transaction = conn.BeginTransaction())
-                    {
-                        try
-                        {
-                            int checkInId;
-
-                            // 1) Create a CheckIns row
-                            string insertCheckIn = @"
-                                INSERT INTO CheckIns
-                                    (ReservationID, GuestID, RoomID, EmployeeID, CheckInDateTime, ExpectedCheckOutDate, NumberOfGuests, Notes, CreatedAt)
-                                VALUES
-                                    (NULL, @GuestID, @RoomID, @EmployeeID, @CheckInDateTime, @ExpectedCheckOutDate, @NumberOfGuests, @Notes, @CreatedAt);
-                                SELECT CAST(SCOPE_IDENTITY() AS INT);";
-
-                            using (var cmd = new SqlCommand(insertCheckIn, conn, transaction))
-                            {
-                                cmd.Parameters.AddWithValue("@GuestID", CurrentUser.EmployeeId);
-                                cmd.Parameters.AddWithValue("@RoomID", ((dynamic)cboRoom.SelectedItem).RoomId);
-                                cmd.Parameters.AddWithValue("@EmployeeID", CurrentUser.EmployeeId);
-                                cmd.Parameters.AddWithValue("@CheckInDateTime", DateTime.Now);
-                                cmd.Parameters.AddWithValue("@ExpectedCheckOutDate", dtpCheckOut.Value);
-                                cmd.Parameters.AddWithValue("@NumberOfGuests", (int)numGuests.Value);
-                                cmd.Parameters.AddWithValue("@Notes", txtNotes.Text);
-                                cmd.Parameters.AddWithValue("@CreatedAt", DateTime.Now);
-
-                                checkInId = (int)cmd.ExecuteScalar();
-                            }
-
-                            // 2) Update room status to Occupied
-                            UpdateRoomStatus(conn, transaction, ((dynamic)cboRoom.SelectedItem).RoomId, "Occupied");
-
-                            transaction.Commit();
-
-                            // Log the check-in activity
-                            _logService.LogActivity(
-                                CurrentUser.EmployeeId,
-                                "CheckIn",
-                                $"Walk-in guest {txtFirstName.Text} {txtLastName.Text} checked into Room {((dynamic)cboRoom.SelectedItem).RoomNumber}",
-                                checkInId
-                            );
-
-                            MessageBox.Show("Check-in successful!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                            // Clear input fields and reset UI
-                            ClearWalkInFields();
-                            LoadAvailableRooms();
-                        }
-                        catch (Exception ex)
-                        {
-                            transaction.Rollback();
-                            MessageBox.Show($"Error during check-in: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        }
-                    }
+                    cmd.Parameters.AddWithValue("@GuestID", guestId);
+                    cmd.Parameters.AddWithValue("@RoomID", roomId);
+                    cmd.Parameters.AddWithValue("@EmployeeID", CurrentUser.EmployeeId);
+                    cmd.Parameters.AddWithValue("@CheckInDateTime", DateTime.Now);
+                    cmd.Parameters.AddWithValue("@ExpectedCheckOutDate", dtpCheckOut.Value.Date);
+                    cmd.Parameters.AddWithValue("@NumberOfGuests", (int)numGuests.Value);
+                    cmd.Parameters.AddWithValue("@Notes",
+                        string.IsNullOrWhiteSpace(txtNotes.Text) ? (object)DBNull.Value : txtNotes.Text.Trim());
+                    cmd.Parameters.AddWithValue("@CreatedAt", DateTime.Now);
+                    checkInId = (int)cmd.ExecuteScalar()!;
                 }
+
+                if (selectedAmenities.Count > 0)
+                    InsertCheckInAmenities(conn, transaction, checkInId, selectedAmenities);
+
+                UpdateRoomStatus(conn, transaction, roomId, "Occupied");
+                transaction.Commit();
+
+                try
+                {
+                    _logService.LogActivity(
+                        CurrentUser.EmployeeId,
+                        "CheckIn",
+                        $"Walk-in guest {txtFirstName.Text} {txtLastName.Text} checked into Room {((dynamic)cboRoom.SelectedItem).RoomNumber}",
+                        checkInId);
+                }
+                catch { }
+
+                MessageBox.Show("Check-in successful!", "Success",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                ClearWalkInFields();
+                LoadAvailableRooms();
             }
-            catch (Exception ex)
+            catch (Exception exInner)
             {
-                MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                try { transaction?.Rollback(); } catch { }
+                MessageBox.Show($"Error during check-in: {exInner.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        // Replace BtnCheckInReservation_Click to INSERT into CheckIns like Walk‑In
-        private void BtnCheckInReservation_Click(object sender, EventArgs e)
+        // NEW: Validation similar to ReservationControl (adaptable if ReservationControl uses other rules)
+        private bool ValidateWalkInInputs()
         {
-            if (cboReservation.SelectedItem == null)
-                return;
+            if (string.IsNullOrWhiteSpace(txtFirstName.Text))
+                return Fail("First Name is required.", txtFirstName);
+            if (string.IsNullOrWhiteSpace(txtLastName.Text))
+                return Fail("Last Name is required.", txtLastName);
+            if (string.IsNullOrWhiteSpace(txtPhone.Text))
+                return Fail("Phone is required.", txtPhone);
+            if (cboIDType.SelectedItem == null)
+                return Fail("ID Type is required.", cboIDType);
+            if (string.IsNullOrWhiteSpace(txtIDNumber.Text))
+                return Fail("ID Number is required.", txtIDNumber);
+            if (cboRoom.SelectedItem == null)
+                return Fail("Select a room.", cboRoom);
+            if (numGuests.Value <= 0)
+                return Fail("Guests must be at least 1.", numGuests);
 
-            dynamic reservation = cboReservation.SelectedItem;
+            var phone = txtPhone.Text.Trim();
+            if (!Regex.IsMatch(phone, @"^[\+\d\-\s]+$") || Regex.Matches(phone, @"\d").Count < 7 || phone.Length > 20)
+                return Fail("Enter a valid phone number (7+ digits, allowed: digits + - space).", txtPhone);
 
-            try
+            var email = txtEmail.Text.Trim();
+            if (!string.IsNullOrWhiteSpace(email) && !IsValidEmail(email))
+                return Fail("Enter a valid email address.", txtEmail);
+
+            if (txtIDNumber.Text.Trim().Length < 3)
+                return Fail("ID Number must be at least 3 characters.", txtIDNumber);
+
+            if (dtpCheckOut.Value.Date <= DateTime.Today)
+                return Fail("Expected Check-Out must be after today.", dtpCheckOut);
+
+            return true;
+        }
+
+        private static bool IsValidEmail(string email)
+        {
+            const string pattern = @"^[^@\s]+@[^@\s]+\.[^@\s]+$";
+            return Regex.IsMatch(email, pattern);
+        }
+
+        private bool Fail(string message, Control focusTarget)
+        {
+            MessageBox.Show(message, "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            focusTarget.Focus();
+            return false;
+        }
+
+        #endregion
+
+        #region Database Helpers
+
+        private void InsertCheckInAmenities(SqlConnection conn, SqlTransaction tx, int checkInId,
+            List<HotelMgt.otherUI.AmenitiesPanel.AmenitySelection> amenities)
+        {
+            const string sql = @"
+INSERT INTO CheckInAmenities (CheckInID, AmenityID, Quantity, UnitPrice, CreatedAt)
+VALUES (@CheckInID, @AmenityID, @Quantity, @UnitPrice, GETDATE());";
+
+            foreach (var amenity in amenities)
             {
-                using (var conn = _dbService.GetConnection())
-                {
-                    conn.Open();
-                    using (var transaction = conn.BeginTransaction())
-                    {
-                        int checkInId;
-
-                        try
-                        {
-                            // 1) Mark reservation as CheckedIn
-                            string updateQuery = @"
-                                UPDATE Reservations
-                                SET ReservationStatus = 'CheckedIn', EmployeeID = @EmployeeId, UpdatedAt = @Now
-                                WHERE ReservationID = @ReservationId";
-
-                            using (var cmd = new SqlCommand(updateQuery, conn, transaction))
-                            {
-                                cmd.Parameters.AddWithValue("@EmployeeId", CurrentUser.EmployeeId);
-                                cmd.Parameters.AddWithValue("@Now", DateTime.Now);
-                                cmd.Parameters.AddWithValue("@ReservationId", reservation.ReservationId);
-                                cmd.ExecuteNonQuery();
-                            }
-
-                            // 2) Create a CheckIns row
-                            string insertCheckIn = @"
-                                INSERT INTO CheckIns
-                                    (ReservationID, GuestID, RoomID, EmployeeID, CheckInDateTime, ExpectedCheckOutDate, NumberOfGuests, Notes, CreatedAt)
-                                VALUES
-                                    (@ReservationID, @GuestID, @RoomID, @EmployeeID, @CheckInDateTime, @ExpectedCheckOutDate, @NumberOfGuests, @Notes, @CreatedAt);
-                                SELECT CAST(SCOPE_IDENTITY() AS INT);";
-
-                            using (var cmd = new SqlCommand(insertCheckIn, conn, transaction))
-                            {
-                                cmd.Parameters.AddWithValue("@ReservationID", (int)reservation.ReservationId);
-                                cmd.Parameters.AddWithValue("@GuestID", (int)reservation.GuestId);
-                                cmd.Parameters.AddWithValue("@RoomID", (int)reservation.RoomId);
-                                cmd.Parameters.AddWithValue("@EmployeeID", CurrentUser.EmployeeId);
-                                cmd.Parameters.AddWithValue("@CheckInDateTime", DateTime.Now);
-                                cmd.Parameters.AddWithValue("@ExpectedCheckOutDate", (DateTime)reservation.CheckOutDate);
-                                cmd.Parameters.AddWithValue("@NumberOfGuests", (int)reservation.NumberOfGuests);
-                                cmd.Parameters.AddWithValue("@Notes", string.IsNullOrWhiteSpace((string)reservation.SpecialRequests) ? (object)DBNull.Value : (string)reservation.SpecialRequests);
-                                cmd.Parameters.AddWithValue("@CreatedAt", DateTime.Now);
-
-                                checkInId = (int)cmd.ExecuteScalar();
-                            }
-
-                            // 3) Update room status to Occupied
-                            UpdateRoomStatus(conn, transaction, (int)reservation.RoomId, "Occupied");
-
-                            transaction.Commit();
-
-                            // Log after successful commit (reference CheckInId like Walk‑In)
-                            try
-                            {
-                                _logService.LogActivity(
-                                    CurrentUser.EmployeeId,
-                                    "CheckIn",
-                                    $"Guest {reservation.GuestName} checked into Room {reservation.RoomNumber} (Reservation)",
-                                    checkInId
-                                );
-                            }
-                            catch { /* don't block UX on log failure */ }
-
-                            MessageBox.Show(
-                                $"Guest {reservation.GuestName} successfully checked in to Room {reservation.RoomNumber}!",
-                                "Check-In Successful",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Information
-                            );
-
-                            LoadPendingReservations();
-                            LoadAvailableRooms();
-                        }
-                        catch (Exception ex)
-                        {
-                            transaction.Rollback();
-                            MessageBox.Show(
-                                $"Error during reservation check-in: {ex.Message}",
-                                "Error",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Error
-                            );
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    $"Error: {ex.Message}",
-                    "Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
+                using var cmd = new SqlCommand(sql, conn, tx);
+                cmd.Parameters.AddWithValue("@CheckInID", checkInId);
+                cmd.Parameters.AddWithValue("@AmenityID", amenity.AmenityID);
+                cmd.Parameters.AddWithValue("@Quantity", amenity.Quantity);
+                cmd.Parameters.AddWithValue("@UnitPrice", amenity.Price);
+                cmd.ExecuteNonQuery();
             }
         }
 
         private void UpdateRoomStatus(SqlConnection conn, SqlTransaction transaction, int roomId, string status)
         {
-            string updateRoomQuery = "UPDATE Rooms SET Status = @Status WHERE RoomID = @RoomID";
-
-            using (var cmd = new SqlCommand(updateRoomQuery, conn, transaction))
-            {
-                cmd.Parameters.AddWithValue("@Status", status);
-                cmd.Parameters.AddWithValue("@RoomID", roomId);
-                cmd.ExecuteNonQuery();
-            }
+            const string updateRoomQuery = "UPDATE Rooms SET Status = @Status WHERE RoomID = @RoomID";
+            using var cmd = new SqlCommand(updateRoomQuery, conn, transaction);
+            cmd.Parameters.AddWithValue("@Status", status);
+            cmd.Parameters.AddWithValue("@RoomID", roomId);
+            cmd.ExecuteNonQuery();
         }
 
         private void ClearWalkInFields()
         {
             txtFirstName.Clear();
+            txtMiddleName.Clear();
             txtLastName.Clear();
             txtEmail.Clear();
             txtPhone.Clear();

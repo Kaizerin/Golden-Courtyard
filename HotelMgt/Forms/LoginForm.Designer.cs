@@ -1,16 +1,10 @@
-﻿namespace HotelMgt.Forms
+﻿// Improved design version of LoginForm.Designer.cs (names and functions unchanged)
+namespace HotelMgt.Forms
 {
     partial class LoginForm
     {
-        /// <summary>
-        /// Required designer variable.
-        /// </summary>
         private System.ComponentModel.IContainer components = null;
 
-        /// <summary>
-        /// Clean up any resources being used.
-        /// </summary>
-        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
         protected override void Dispose(bool disposing)
         {
             if (disposing && (components != null))
@@ -22,10 +16,6 @@
 
         #region Windows Form Designer generated code
 
-        /// <summary>
-        /// Required method for Designer support - do not modify
-        /// the contents of this method with the code editor.
-        /// </summary>
         private void InitializeComponent()
         {
             panelLoginCard = new HotelMgt.Custom.RoundedPanel();
@@ -37,152 +27,118 @@
             lblUsername = new Label();
             lblDescription = new Label();
             lblTitle = new Label();
+            chkShowPassword = new CheckBox();
             panelLoginCard.SuspendLayout();
             SuspendLayout();
-            // 
+
+            // Root Form
+            AutoScaleDimensions = new SizeF(7F, 15F);
+            AutoScaleMode = AutoScaleMode.Font;
+            BackColor = Color.FromArgb(241, 245, 249); // Soft gray background
+            ClientSize = new Size(520, 600);
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            MaximizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            Text = "Hotel Management System - Login";
+
             // panelLoginCard
-            // 
             panelLoginCard.BackColor = Color.White;
-            panelLoginCard.BorderRadius = 12;
-            panelLoginCard.Controls.Add(panelLogo);
-            panelLoginCard.Controls.Add(txtUsername);
-            panelLoginCard.Controls.Add(txtPassword);
-            panelLoginCard.Controls.Add(btnLogin);
-            panelLoginCard.Controls.Add(lbPassword);
-            panelLoginCard.Controls.Add(lblUsername);
-            panelLoginCard.Controls.Add(lblDescription);
-            panelLoginCard.Controls.Add(lblTitle);
-            panelLoginCard.Location = new Point(33, 40);
-            panelLoginCard.Name = "panelLoginCard";
-            panelLoginCard.Size = new Size(420, 480);
-            panelLoginCard.TabIndex = 0;
-            // 
+            panelLoginCard.BorderRadius = 16;
+            panelLoginCard.Size = new Size(420, 520);
+            panelLoginCard.Location = new Point((ClientSize.Width - panelLoginCard.Width) / 2, 40);
+            panelLoginCard.Padding = new Padding(20, 20, 20, 20);
+
             // panelLogo
-            // 
             panelLogo.BackColor = Color.FromArgb(37, 99, 235);
             panelLogo.BorderRadius = 12;
-            panelLogo.Location = new Point(177, 63);
-            panelLogo.Name = "panelLogo";
-            panelLogo.Size = new Size(60, 60);
-            panelLogo.TabIndex = 25;
-            // 
+            panelLogo.Size = new Size(70, 70);
+            panelLogo.Location = new Point((panelLoginCard.Width - panelLogo.Width) / 2, 40);
+
+            // lblTitle
+            lblTitle.AutoSize = false;
+            lblTitle.Font = new Font("Segoe UI", 20F, FontStyle.Bold);
+            lblTitle.ForeColor = Color.FromArgb(30, 41, 59);
+            lblTitle.TextAlign = ContentAlignment.MiddleCenter;
+            lblTitle.Text = "Hotel Management System";
+            lblTitle.Size = new Size(panelLoginCard.Width - 40, 40);
+            lblTitle.Location = new Point(20, 130);
+
+            // lblDescription
+            lblDescription.AutoSize = false;
+            lblDescription.Font = new Font("Segoe UI", 11F);
+            lblDescription.ForeColor = Color.FromArgb(100, 116, 139);
+            lblDescription.Text = "Enter your credentials to access the reception desk";
+            lblDescription.TextAlign = ContentAlignment.MiddleCenter;
+            lblDescription.Size = new Size(panelLoginCard.Width - 40, 30);
+            lblDescription.Location = new Point(20, 175);
+
+            // lblUsername
+            lblUsername.AutoSize = true;
+            lblUsername.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+            lblUsername.ForeColor = Color.FromArgb(30, 41, 59);
+            lblUsername.Text = "Employee Username";
+            lblUsername.Location = new Point(40, 230);
+
             // txtUsername
-            // 
             txtUsername.BackColor = Color.White;
             txtUsername.BorderColor = Color.FromArgb(203, 213, 225);
             txtUsername.BorderFocusColor = Color.FromArgb(59, 130, 246);
-            txtUsername.BorderRadius = 6;
-            txtUsername.BorderSize = 1;
+            txtUsername.BorderRadius = 8;
             txtUsername.Font = new Font("Segoe UI", 10F);
-            txtUsername.ForeColor = Color.Black;
-            txtUsername.Location = new Point(37, 245);
-            txtUsername.Multiline = false;
-            txtUsername.Name = "txtUsername";
-            txtUsername.Padding = new Padding(10, 7, 10, 7);
-            txtUsername.PasswordChar = false;
-            txtUsername.PlaceholderColor = Color.Gray;
             txtUsername.PlaceholderText = "Enter your username";
-            txtUsername.Size = new Size(340, 38);
-            txtUsername.TabIndex = 24;
-            txtUsername.UnderlinedStyle = false;
-            // 
+            txtUsername.Location = new Point(40, 255);
+            txtUsername.Size = new Size(340, 40);
+
+            // lbPassword
+            lbPassword.AutoSize = true;
+            lbPassword.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+            lbPassword.ForeColor = Color.FromArgb(30, 41, 59);
+            lbPassword.Text = "Password";
+            lbPassword.Location = new Point(40, 310);
+
             // txtPassword
-            // 
             txtPassword.BackColor = Color.White;
             txtPassword.BorderColor = Color.FromArgb(203, 213, 225);
             txtPassword.BorderFocusColor = Color.FromArgb(59, 130, 246);
-            txtPassword.BorderRadius = 6;
-            txtPassword.BorderSize = 1;
+            txtPassword.BorderRadius = 8;
             txtPassword.Font = new Font("Segoe UI", 10F);
-            txtPassword.ForeColor = Color.Black;
-            txtPassword.Location = new Point(37, 320);
-            txtPassword.Multiline = false;
-            txtPassword.Name = "txtPassword";
-            txtPassword.Padding = new Padding(10, 7, 10, 7);
-            txtPassword.PasswordChar = true;
-            txtPassword.PlaceholderColor = Color.Gray;
             txtPassword.PlaceholderText = "Enter your password";
-            txtPassword.Size = new Size(340, 38);
-            txtPassword.TabIndex = 23;
-            txtPassword.UnderlinedStyle = false;
-            // 
+            txtPassword.PasswordChar = true;
+            txtPassword.Location = new Point(40, 335);
+            txtPassword.Size = new Size(340, 40);
+
+
+            // chkShowPassword
+            chkShowPassword.Text = "Show Password";
+            chkShowPassword.Font = new Font("Segoe UI", 9F);
+            chkShowPassword.ForeColor = Color.FromArgb(100, 116, 139);
+            chkShowPassword.AutoSize = true;
+            chkShowPassword.Location = new Point(40, 380);
+            chkShowPassword.CheckedChanged += chkShowPassword_CheckedChanged;
+
             // btnLogin
-            // 
             btnLogin.BackColor = Color.FromArgb(37, 99, 235);
-            btnLogin.BorderColor = Color.Transparent;
-            btnLogin.BorderRadius = 8;
-            btnLogin.BorderSize = 0;
-            btnLogin.FlatAppearance.BorderSize = 0;
-            btnLogin.FlatStyle = FlatStyle.Flat;
-            btnLogin.Font = new Font("Segoe UI Semibold", 11.25F, FontStyle.Bold, GraphicsUnit.Point, 0);
+            btnLogin.BorderRadius = 10;
+            btnLogin.Font = new Font("Segoe UI Semibold", 12F, FontStyle.Bold);
             btnLogin.ForeColor = Color.White;
-            btnLogin.Location = new Point(37, 378);
-            btnLogin.Name = "btnLogin";
-            btnLogin.RightToLeft = RightToLeft.Yes;
-            btnLogin.Size = new Size(346, 40);
-            btnLogin.TabIndex = 22;
             btnLogin.Text = "Login";
-            btnLogin.UseVisualStyleBackColor = false;
+            btnLogin.Size = new Size(340, 45);
+            btnLogin.Location = new Point(40, 420);
+            btnLogin.FlatStyle = FlatStyle.Flat;
             btnLogin.Click += btnLogin_Click;
-            // 
-            // lbPassword
-            // 
-            lbPassword.AutoSize = true;
-            lbPassword.Font = new Font("Segoe UI", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lbPassword.ForeColor = Color.FromArgb(30, 41, 59);
-            lbPassword.Location = new Point(37, 298);
-            lbPassword.Name = "lbPassword";
-            lbPassword.Size = new Size(66, 17);
-            lbPassword.TabIndex = 21;
-            lbPassword.Text = "Password";
-            // 
-            // lblUsername
-            // 
-            lblUsername.AutoSize = true;
-            lblUsername.Font = new Font("Segoe UI", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblUsername.ForeColor = Color.FromArgb(30, 41, 59);
-            lblUsername.Location = new Point(37, 223);
-            lblUsername.Name = "lblUsername";
-            lblUsername.Size = new Size(133, 17);
-            lblUsername.TabIndex = 20;
-            lblUsername.Text = "Employee Username";
-            // 
-            // lblDescription
-            // 
-            lblDescription.AutoSize = true;
-            lblDescription.Font = new Font("Segoe UI", 11.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
-            lblDescription.ForeColor = Color.FromArgb(100, 116, 139);
-            lblDescription.Location = new Point(37, 183);
-            lblDescription.Name = "lblDescription";
-            lblDescription.Size = new Size(342, 20);
-            lblDescription.TabIndex = 19;
-            lblDescription.Text = "Enter your credentials to access the reception desk";
-            lblDescription.TextAlign = ContentAlignment.MiddleCenter;
-            // 
-            // lblTitle
-            // 
-            lblTitle.AutoSize = true;
-            lblTitle.Font = new Font("Segoe UI", 18F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblTitle.ForeColor = Color.FromArgb(30, 41, 59);
-            lblTitle.Location = new Point(57, 143);
-            lblTitle.Name = "lblTitle";
-            lblTitle.Size = new Size(321, 32);
-            lblTitle.TabIndex = 18;
-            lblTitle.Text = "Hotel Management System";
-            lblTitle.TextAlign = ContentAlignment.MiddleCenter;
-            // 
-            // LoginForm
-            // 
-            AutoScaleDimensions = new SizeF(7F, 15F);
-            AutoScaleMode = AutoScaleMode.Font;
-            BackColor = Color.LightGray;
-            ClientSize = new Size(484, 561);
+
+            panelLoginCard.Controls.Add(panelLogo);
+            panelLoginCard.Controls.Add(lblTitle);
+            panelLoginCard.Controls.Add(lblDescription);
+            panelLoginCard.Controls.Add(lblUsername);
+            panelLoginCard.Controls.Add(txtUsername);
+            panelLoginCard.Controls.Add(lbPassword);
+            panelLoginCard.Controls.Add(txtPassword);
+            panelLoginCard.Controls.Add(chkShowPassword);
+            panelLoginCard.Controls.Add(btnLogin);
+
             Controls.Add(panelLoginCard);
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox = false;
-            Name = "LoginForm";
-            StartPosition = FormStartPosition.CenterScreen;
-            Text = "Hotel Management System - Login";
+
             panelLoginCard.ResumeLayout(false);
             panelLoginCard.PerformLayout();
             ResumeLayout(false);
@@ -198,7 +154,7 @@
         private Label lblUsername;
         private Label lblDescription;
         private Label lblTitle;
-        private Panel roundedPanel1;
         private Custom.RoundedPanel panelLogo;
+        private CheckBox chkShowPassword;
     }
 }

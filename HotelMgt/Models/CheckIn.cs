@@ -1,8 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace HotelMgt.Models
 {
@@ -20,8 +16,8 @@ namespace HotelMgt.Models
         public int? CheckedOutByEmployeeId { get; set; }
 
         // Navigation properties
-        public string GuestName { get; set; }
-        public string RoomNumber { get; set; }
+        public string GuestName { get; set; } = string.Empty;
+        public string RoomNumber { get; set; } = string.Empty;
         public bool IsCheckedOut => ActualCheckOutDate.HasValue;
         public int NightsStayed
         {

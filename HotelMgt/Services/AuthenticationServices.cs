@@ -2,10 +2,6 @@
 using HotelMgt.Utilities;
 using Microsoft.Data.SqlClient;
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace HotelMgt.Services
 {
@@ -20,7 +16,7 @@ namespace HotelMgt.Services
             _logService = new ActivityLogService();
         }
 
-        public Employee AuthenticateUser(string username, string password)
+        public Employee? AuthenticateUser(string username, string password)
         {
             try
             {
@@ -55,17 +51,14 @@ namespace HotelMgt.Services
                                     HireDate = reader.GetDateTime(9)
                                 };
 
-                                // Plain text password check
                                 if (password == employee.PasswordHash)
                                 {
-                                    // Set current user
                                     CurrentUser.EmployeeId = employee.EmployeeId;
                                     CurrentUser.FirstName = employee.FirstName;
                                     CurrentUser.LastName = employee.LastName;
                                     CurrentUser.Email = employee.Email;
                                     CurrentUser.Role = employee.Role;
 
-                                    // Log activity
                                     _logService.LogActivity(
                                         employee.EmployeeId,
                                         "Login",

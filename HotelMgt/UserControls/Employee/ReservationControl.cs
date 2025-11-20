@@ -1,10 +1,17 @@
-﻿using System;
-using Microsoft.Data.SqlClient; // Use Microsoft.Data.SqlClient only
-using System.Drawing;
-using System.Windows.Forms;
+﻿using HotelMgt.Documents;
+using HotelMgt.Forms;
+using HotelMgt.Models;
+using HotelMgt.otherUI; // At the top if not already
 using HotelMgt.Services;
+using HotelMgt.UIStyles;
 using HotelMgt.Utilities;
-using System.Globalization; // ADD
+using Microsoft.Data.SqlClient; // Use Microsoft.Data.SqlClient only
+using System;
+using System.Drawing;
+using System.Globalization;
+using System.Net.Mail;
+using System.Windows.Forms;
+using HotelMgt.Core.Events;
 
 namespace HotelMgt.UserControls.Employee
 {
@@ -12,25 +19,38 @@ namespace HotelMgt.UserControls.Employee
     {
         private readonly DatabaseService _dbService;
         private readonly ActivityLogService _logService;
+        private readonly EmailService _emailService;
+        private readonly GuestService _guestService = new GuestService(); // Add this field if not present
 
-        // ADD: PHP currency culture
         private readonly CultureInfo _currencyCulture = CultureInfo.GetCultureInfo("en-PH");
 
-        // Controls
-        private TextBox txtFirstName = null!, txtLastName = null!, txtEmail = null!, txtPhone = null!;
+        // Controls (assigned by builder)
+        private TextBox txtFirstName = null!, txtMiddleName = null!, txtLastName = null!, txtEmail = null!, txtPhone = null!;
+        private ComboBox cboIDType = null!;
+        private TextBox txtIDNumber = null!;
         private DateTimePicker dtpCheckIn = null!, dtpCheckOut = null!;
         private ComboBox cboRoom = null!;
+        private ComboBox cboAmenities = null!;
         private NumericUpDown numGuests = null!;
         private TextBox txtSpecialRequests = null!;
         private Label lblTotalAmount = null!;
-        private Button btnCreateReservation = null!;
+        private Button btnCreateReservation = null!; // "Generate Code"
+        private Label lblDownpayment = null!;
+        private ComboBox cboPaymentMethod = null!;
+        private TextBox txtTransactionRef = null!;
+
+        private AmenitiesPanel amenitiesPanel = null!; // Add this field to your ReservationControl
+
+        // To avoid recursion while sanitizing phone text
+        private bool _suppressPhoneTextChanged;
 
         public ReservationControl()
         {
             InitializeComponent();
             _dbService = new DatabaseService();
             _logService = new ActivityLogService();
-            this.Load += ReservationControl_Load; // mirror CheckOutControl
+            _emailService = new EmailService(EmailSettings.LoadFromEnvironment());
+            this.Load += ReservationControl_Load;
         }
 
         private void ReservationControl_Load(object? sender, EventArgs e)
@@ -40,167 +60,90 @@ namespace HotelMgt.UserControls.Employee
             CalculateTotalAmount();
         }
 
-        private void InitializeControls()   
+        private void InitializeControls()
         {
-            BackColor = Color.White;
-            Dock = DockStyle.Fill;
+            ReservationViewBuilder.Build(
+                this,
+                _currencyCulture,
+                out txtFirstName, out txtMiddleName, out txtLastName, out txtEmail, out txtPhone,
+                out cboIDType, out txtIDNumber,
+                out dtpCheckIn, out dtpCheckOut,
+                out cboRoom,
+                out var _cboAmenities, // ignore, not used
+                out numGuests,
+                out txtSpecialRequests,
+                out lblDownpayment,
+                out lblTotalAmount,
+                out cboPaymentMethod,
+                out txtTransactionRef,
+                out btnCreateReservation,
+                out amenitiesPanel // <-- Use the out parameter here
+            );
 
-            Controls.Clear();
+            // No need to search for amenitiesPanel by name anymore!
 
-            int y = 20;
+            // Subscribe to amenities selection changes
+            amenitiesPanel.SelectionChanged += (s, e) => CalculateTotalAmount();
 
-            var lblTitle = new Label
-            {
-                Text = "Create Reservation",
-                Font = new Font("Segoe UI", 18, FontStyle.Bold),
-                Location = new Point(20, y),
-                AutoSize = true
-            };
-            Controls.Add(lblTitle);
+            AttachPhoneNumberValidation();
 
-            y += 40;
-            var lblSubtitle = new Label
-            {
-                Text = "Enter guest info, pick dates and room, then save.",
-                Font = new Font("Segoe UI", 10),
-                ForeColor = Color.Gray,
-                Location = new Point(20, y),
-                AutoSize = true
-            };
-            Controls.Add(lblSubtitle);
-
-            y += 30;
-            var lblGuestInfo = new Label
-            {
-                Text = "Guest Information",
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                Location = new Point(20, y),
-                AutoSize = true
-            };
-            Controls.Add(lblGuestInfo);
-
-            y += 35;
-            Controls.Add(new Label { Text = "First Name *", Location = new Point(20, y), Size = new Size(120, 20), Font = new Font("Segoe UI", 9) });
-            txtFirstName = new TextBox { Location = new Point(20, y + 22), Size = new Size(250, 25), Font = new Font("Segoe UI", 10), PlaceholderText = "John" };
-            Controls.Add(txtFirstName);
-
-            Controls.Add(new Label { Text = "Last Name *", Location = new Point(290, y), Size = new Size(120, 20), Font = new Font("Segoe UI", 9) });
-            txtLastName = new TextBox { Location = new Point(290, y + 22), Size = new Size(250, 25), Font = new Font("Segoe UI", 10), PlaceholderText = "Doe" };
-            Controls.Add(txtLastName);
-
-            y += 60;
-            Controls.Add(new Label { Text = "Email", Location = new Point(20, y), Size = new Size(120, 20), Font = new Font("Segoe UI", 9) });
-            txtEmail = new TextBox { Location = new Point(20, y + 22), Size = new Size(250, 25), Font = new Font("Segoe UI", 10), PlaceholderText = "john@example.com" };
-            Controls.Add(txtEmail);
-
-            Controls.Add(new Label { Text = "Phone Number *", Location = new Point(290, y), Size = new Size(140, 20), Font = new Font("Segoe UI", 9) });
-            txtPhone = new TextBox { Location = new Point(290, y + 22), Size = new Size(250, 25), Font = new Font("Segoe UI", 10), PlaceholderText = "+1 555 123 4567" };
-            Controls.Add(txtPhone);
-
-            y += 70;
-            var lblStayInfo = new Label
-            {
-                Text = "Stay & Room",
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                Location = new Point(20, y),
-                AutoSize = true
-            };
-            Controls.Add(lblStayInfo);
-
-            y += 35;
-            Controls.Add(new Label { Text = "Check-In *", Location = new Point(20, y), Size = new Size(120, 20), Font = new Font("Segoe UI", 9) });
-            dtpCheckIn = new DateTimePicker
-            {
-                Location = new Point(20, y + 22),
-                Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 10),
-                Format = DateTimePickerFormat.Short,
-                MinDate = DateTime.Today
-            };
-            Controls.Add(dtpCheckIn);
-
-            Controls.Add(new Label { Text = "Check-Out *", Location = new Point(290, y), Size = new Size(120, 20), Font = new Font("Segoe UI", 9) });
-            dtpCheckOut = new DateTimePicker
-            {
-                Location = new Point(290, y + 22),
-                Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 10),
-                Format = DateTimePickerFormat.Short,
-                MinDate = DateTime.Today.AddDays(1),
-                Value = DateTime.Today.AddDays(1)
-            };
-            Controls.Add(dtpCheckOut);
-
-            // Hook handlers after both pickers exist
             dtpCheckIn.ValueChanged += (s, e2) =>
             {
                 dtpCheckOut.MinDate = dtpCheckIn.Value.AddDays(1);
-                if (dtpCheckOut.Value <= dtpCheckIn.Value) dtpCheckOut.Value = dtpCheckIn.Value.AddDays(1);
+                if (dtpCheckOut.Value <= dtpCheckIn.Value)
+                    dtpCheckOut.Value = dtpCheckIn.Value.AddDays(1);
                 CalculateTotalAmount();
             };
             dtpCheckOut.ValueChanged += (s, e2) => CalculateTotalAmount();
-
-            y += 60;
-            Controls.Add(new Label { Text = "Room *", Location = new Point(20, y), Size = new Size(120, 20), Font = new Font("Segoe UI", 9) });
-            cboRoom = new ComboBox
-            {
-                Location = new Point(20, y + 22),
-                Size = new Size(520, 25),
-                Font = new Font("Segoe UI", 10),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                DisplayMember = "DisplayText",
-                ValueMember = "RoomId"
-            };
             cboRoom.SelectedIndexChanged += (s, e2) => CalculateTotalAmount();
-            Controls.Add(cboRoom);
+            btnCreateReservation.Click += BtnGenerateCode_Click;
 
-            y += 60;
-            Controls.Add(new Label { Text = "Guests *", Location = new Point(20, y), Size = new Size(120, 20), Font = new Font("Segoe UI", 9) });
-            numGuests = new NumericUpDown
+            cboPaymentMethod.SelectedIndexChanged += (s, e) =>
             {
-                Location = new Point(20, y + 22),
-                Size = new Size(120, 25),
-                Font = new Font("Segoe UI", 10),
-                Minimum = 1,
-                Maximum = 10,
-                Value = 1
+                bool isCash = cboPaymentMethod.SelectedItem?.ToString() == "Cash";
+                txtTransactionRef.Enabled = !isCash;
+                if (isCash) txtTransactionRef.Clear();
             };
-            Controls.Add(numGuests);
+            // Set initial state
+            bool isCashInit = cboPaymentMethod.SelectedItem?.ToString() == "Cash";
+            txtTransactionRef.Enabled = !isCashInit;
+            if (isCashInit) txtTransactionRef.Clear();
+        }
 
-            Controls.Add(new Label { Text = "Special Requests", Location = new Point(160, y), Size = new Size(140, 20), Font = new Font("Segoe UI", 9) });
-            txtSpecialRequests = new TextBox
+        private void AttachPhoneNumberValidation()
+        {
+            // Block non-digits (allow control keys)
+            txtPhone.KeyPress += (s, e) =>
             {
-                Location = new Point(160, y + 22),
-                Size = new Size(380, 60),
-                Font = new Font("Segoe UI", 10),
-                Multiline = true
+                if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+                    e.Handled = true;
             };
-            Controls.Add(txtSpecialRequests);
 
-            y += 95;
-            lblTotalAmount = new Label
+            // Sanitize pasted text to digits only
+            txtPhone.TextChanged += (s, e) =>
             {
-                Text = $"Total: {0m.ToString("C2", _currencyCulture)}",
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                Location = new Point(20, y),
-                AutoSize = true,
-                ForeColor = Color.FromArgb(30, 41, 59)
-            };
-            Controls.Add(lblTotalAmount);
+                if (_suppressPhoneTextChanged) return;
+                var original = txtPhone.Text;
+                if (string.IsNullOrEmpty(original)) return;
 
-            btnCreateReservation = new Button
-            {
-                Text = "Create Reservation",
-                Location = new Point(20, y + 35),
-                Size = new Size(520, 45),
-                BackColor = Color.FromArgb(37, 99, 235),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                FlatStyle = FlatStyle.Flat
+                Span<char> buffer = stackalloc char[original.Length];
+                int idx = 0;
+                foreach (var ch in original)
+                {
+                    if (char.IsDigit(ch)) buffer[idx++] = ch;
+                }
+
+                if (idx != original.Length)
+                {
+                    _suppressPhoneTextChanged = true;
+                    var caret = txtPhone.SelectionStart;
+                    txtPhone.Text = new string(buffer[..idx]);
+                    txtPhone.SelectionStart = Math.Min(caret - (original.Length - idx), txtPhone.Text.Length);
+                    _suppressPhoneTextChanged = false;
+                }
             };
-            btnCreateReservation.FlatAppearance.BorderSize = 0;
-            btnCreateReservation.Click += BtnCreateReservation_Click;
-            Controls.Add(btnCreateReservation);
+
+            txtPhone.MaxLength = 15;
         }
 
         private void LoadAvailableRooms()
@@ -208,11 +151,10 @@ namespace HotelMgt.UserControls.Employee
             try
             {
                 cboRoom.Items.Clear();
-
                 using var conn = _dbService.GetConnection();
                 conn.Open();
 
-                string query = @"
+                const string query = @"
                     SELECT RoomID, RoomNumber, RoomType, PricePerNight, MaxOccupancy
                     FROM Rooms
                     WHERE Status = 'Available'
@@ -232,13 +174,12 @@ namespace HotelMgt.UserControls.Employee
                         MaxOccupancy = reader.GetInt32(4),
                         DisplayText = $"Room {reader.GetString(1)} - {reader.GetString(2)} ({price}/night) - Max {reader.GetInt32(4)} guests"
                     };
-
                     cboRoom.Items.Add(room);
                 }
 
                 if (cboRoom.Items.Count == 0)
                 {
-                    MessageBox.Show("No rooms available for the selected period.", "No Rooms", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show("No rooms available.", "No Rooms", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
             catch (Exception ex)
@@ -247,63 +188,86 @@ namespace HotelMgt.UserControls.Employee
             }
         }
 
-        private void BtnCreateReservation_Click(object? sender, EventArgs e)
+        private async void BtnGenerateCode_Click(object? sender, EventArgs e)
         {
             if (!ValidateInputs()) return;
 
             int reservationId = 0;
-            string guestFullName = $"{txtFirstName.Text.Trim()} {txtLastName.Text.Trim()}";
+            string reservationCode = "";
+            string guestFullName = $"{txtFirstName.Text.Trim()} {txtMiddleName.Text.Trim()} {txtLastName.Text.Trim()}".Replace("  ", " ").Trim();
             string roomNumber = "";
             int nights = 0;
             decimal total = 0m;
+            decimal pricePerNight = 0m;
+
+            dynamic room = cboRoom.SelectedItem!;
+
+            // Declare selectedAmenities ONCE here
+            var selectedAmenities = amenitiesPanel.GetSelectedAmenities();
 
             try
             {
                 using var conn = _dbService.GetConnection();
-                conn.Open();
+                await conn.OpenAsync();
                 using var tx = conn.BeginTransaction();
 
                 try
                 {
-                    // Find or create guest by phone
-                    int guestId;
-                    using (var find = new SqlCommand("SELECT TOP 1 GuestID FROM Guests WHERE PhoneNumber = @Phone", conn, tx))
+                    // --- FIND OR CREATE GUEST (robust, safe for DataReader) ---
+                    string firstName = txtFirstName.Text.Trim();
+                    string middleName = txtMiddleName.Text.Trim();
+                    string lastName = txtLastName.Text.Trim();
+                    string phone = txtPhone.Text.Trim();
+                    string email = txtEmail.Text.Trim();
+                    string idType = cboIDType.SelectedItem?.ToString() ?? "Unknown";
+                    string idNumber = string.IsNullOrWhiteSpace(txtIDNumber.Text) ? "N/A" : txtIDNumber.Text.Trim();
+
+                    var lookup = GuestLookupHelper.LookupOrPromptGuest(
+                        this, conn, tx,
+                        firstName, middleName, lastName,
+                        (fn, mn, ln, em, ph, idt, idn) => {
+                            txtFirstName.Text = fn;
+                            txtMiddleName.Text = mn;
+                            txtLastName.Text = ln;
+                            txtEmail.Text = em;
+                            txtPhone.Text = ph;
+                            cboIDType.SelectedItem = idt;
+                            txtIDNumber.Text = idn;
+                        });
+
+                    if (lookup.AbortCheckIn)
+                        return;
+
+                    int guestId = lookup.GuestId;
+                    if (!lookup.IsExistingGuest)
                     {
-                        find.Parameters.AddWithValue("@Phone", txtPhone.Text.Trim());
-                        var found = find.ExecuteScalar();
-                        if (found is int id)
-                        {
-                            guestId = id;
-                        }
-                        else
-                        {
-                            using var insertGuest = new SqlCommand(@"
-                                INSERT INTO Guests (FirstName, LastName, Email, PhoneNumber, IDType, IDNumber, CreatedAt)
-                                VALUES (@FirstName, @LastName, @Email, @PhoneNumber, @IDType, @IDNumber, @CreatedAt);
-                                SELECT CAST(SCOPE_IDENTITY() AS INT);", conn, tx);
-                            insertGuest.Parameters.AddWithValue("@FirstName", txtFirstName.Text.Trim());
-                            insertGuest.Parameters.AddWithValue("@LastName", txtLastName.Text.Trim());
-                            insertGuest.Parameters.AddWithValue("@Email", string.IsNullOrWhiteSpace(txtEmail.Text) ? (object)DBNull.Value : txtEmail.Text.Trim());
-                            insertGuest.Parameters.AddWithValue("@PhoneNumber", txtPhone.Text.Trim());
-                            // Schema requires NOT NULL for IDType/IDNumber. Use placeholders at reservation stage.
-                            insertGuest.Parameters.AddWithValue("@IDType", "Unknown");
-                            insertGuest.Parameters.AddWithValue("@IDNumber", "N/A");
-                            insertGuest.Parameters.AddWithValue("@CreatedAt", DateTime.Now);
-                            guestId = (int)insertGuest.ExecuteScalar();
-                        }
+                        guestId = _guestService.EnsureGuest(
+                            conn, tx,
+                            firstName, middleName, lastName, phone, email, idType, idNumber
+                        );
                     }
 
-                    dynamic room = cboRoom.SelectedItem!;
+                    // --- ROOM & TOTAL ---
                     roomNumber = room.RoomNumber;
                     nights = (dtpCheckOut.Value.Date - dtpCheckIn.Value.Date).Days;
-                    total = nights * (decimal)room.PricePerNight;
+                    pricePerNight = (decimal)room.PricePerNight;
+                    decimal downpayment = pricePerNight; // always 1 night
 
+                    // Calculate amenities total
+                    decimal amenitiesTotal = selectedAmenities.Sum(a => a.Price * a.Quantity);
+
+                    total = (nights * pricePerNight) + amenitiesTotal - downpayment;
+                    if (total < 0) total = 0;
+
+                    // --- INSERT RESERVATION ---
                     using var insertReservation = new SqlCommand(@"
-                        INSERT INTO Reservations
-                            (GuestID, RoomID, EmployeeID, CheckInDate, CheckOutDate, NumberOfGuests, TotalAmount, SpecialRequests, ReservationStatus, CreatedAt)
-                        VALUES
-                            (@GuestId, @RoomId, @EmployeeId, @CheckInDate, @CheckOutDate, @Guests, @Total, @Requests, @Status, @CreatedAt);
-                        SELECT CAST(SCOPE_IDENTITY() AS INT);", conn, tx);
+                    DECLARE @output TABLE (ReservationID INT, ReservationCode NVARCHAR(50));
+                    INSERT INTO Reservations
+                        (GuestID, RoomID, EmployeeID, CheckInDate, CheckOutDate, NumberOfGuests, TotalAmount, Downpayment, SpecialRequests, ReservationStatus, CreatedAt)
+                    OUTPUT Inserted.ReservationID, Inserted.ReservationCode INTO @output
+                    VALUES
+                        (@GuestId, @RoomId, @EmployeeId, @CheckInDate, @CheckOutDate, @Guests, @Total, @Downpayment, @Requests, @Status, @CreatedAt);
+                    SELECT ReservationID, ReservationCode FROM @output;", conn, tx);
 
                     insertReservation.Parameters.AddWithValue("@GuestId", guestId);
                     insertReservation.Parameters.AddWithValue("@RoomId", (int)room.RoomId);
@@ -312,37 +276,113 @@ namespace HotelMgt.UserControls.Employee
                     insertReservation.Parameters.AddWithValue("@CheckOutDate", dtpCheckOut.Value.Date);
                     insertReservation.Parameters.AddWithValue("@Guests", (int)numGuests.Value);
                     insertReservation.Parameters.AddWithValue("@Total", total);
+                    insertReservation.Parameters.AddWithValue("@Downpayment", downpayment);
                     insertReservation.Parameters.AddWithValue("@Requests",
                         string.IsNullOrWhiteSpace(txtSpecialRequests.Text) ? (object)DBNull.Value : txtSpecialRequests.Text.Trim());
                     insertReservation.Parameters.AddWithValue("@Status", "Confirmed");
                     insertReservation.Parameters.AddWithValue("@CreatedAt", DateTime.Now);
 
-                    reservationId = (int)insertReservation.ExecuteScalar();
+                    using (var reader = await insertReservation.ExecuteReaderAsync())
+                    {
+                        if (await reader.ReadAsync())
+                        {
+                            reservationId = reader.GetInt32(0);
+                            reservationCode = reader.GetString(1);
+                        }
+                    }
 
-                    tx.Commit();
+                    // --- INSERT RESERVATION AMENITIES ---
+                    if (selectedAmenities.Count > 0)
+                    {
+                        const string sql = @"
+    INSERT INTO ReservationAmenities (ReservationID, AmenityID, Quantity, UnitPrice, CreatedAt)
+    VALUES (@ReservationID, @AmenityID, @Quantity, @UnitPrice, GETDATE());";
+
+                        foreach (var amenity in selectedAmenities)
+                        {
+                            using var cmd = new SqlCommand(sql, conn, tx);
+                            cmd.Parameters.AddWithValue("@ReservationID", reservationId);
+                            cmd.Parameters.AddWithValue("@AmenityID", amenity.AmenityID);
+                            cmd.Parameters.AddWithValue("@Quantity", amenity.Quantity);
+                            cmd.Parameters.AddWithValue("@UnitPrice", amenity.Price);
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+
+                    // --- UPDATE ROOM STATUS TO RESERVED ---
+                    using (var updateRoomCmd = new SqlCommand("UPDATE Rooms SET Status = 'Reserved' WHERE RoomID = @RoomID", conn, tx))
+                    {
+                        updateRoomCmd.Parameters.AddWithValue("@RoomID", (int)room.RoomId);
+                        updateRoomCmd.ExecuteNonQuery();
+                    }
+
+                    await tx.CommitAsync();
+
+                    // Notify listeners (like AvailableRoomsControl) to refresh
+                    RoomEvents.Publish(RoomChangeType.Updated, (int)room.RoomId);
                 }
                 catch
                 {
-                    tx.Rollback();
+                    await tx.RollbackAsync();
                     throw;
                 }
 
-                // Log only after successful commit
+                // --- LOG ACTIVITY ---
                 try
                 {
                     _logService.LogActivity(
                         CurrentUser.EmployeeId,
                         "Reservation",
-                        $"Reservation #{reservationId} created for {guestFullName} in Room {roomNumber} ({nights} nights, {total.ToString("C2", _currencyCulture)})",
+                        $"Reservation #{reservationId} created for {guestFullName} in Room {roomNumber} ({nights} nights, {total.ToString("C2", _currencyCulture)}), Code: {reservationCode}",
                         reservationId
                     );
                 }
-                catch
-                {
-                    // Do not block UX on logging errors
-                }
+                catch { }
 
-                MessageBox.Show($"Reservation created successfully! ID: {reservationId}", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                // --- AMENITIES ---
+                var amenities = selectedAmenities.Count == 0
+                    ? new List<string> { "None" }
+                    : selectedAmenities.Select(a => $"{a.Name} x{a.Quantity} ({a.Price.ToString("C2", _currencyCulture)})").ToList();
+
+                // --- RECEIPT ---
+                var receipt = new ReservationReceipt
+                {
+                    ReservationCode = reservationCode,
+                    GuestFullName = guestFullName,
+                    Email = txtEmail.Text.Trim(),
+                    Phone = txtPhone.Text.Trim(),
+                    NumberOfGuests = (int)numGuests.Value,
+                    CheckIn = dtpCheckIn.Value.Date,
+                    CheckOut = dtpCheckOut.Value.Date,
+                    RoomNumber = room.RoomNumber,
+                    RoomType = room.RoomType,
+                    PricePerNight = pricePerNight,
+                    Nights = nights,
+                    TotalAmount = total,
+                    Inclusions = amenities,
+                    BankAccounts = new List<(string Title, string Body)>
+            {
+                ("BDO (Peso)", "Account Name: Golden Courtyard Hotel; Account No.: 123-456-7890"),
+                ("GCash", "0917-123-4567")
+            }
+                };
+
+                using var form = new ReservationCodeForm(
+                    _emailService,
+                    _logService,
+                    _currencyCulture,
+                    CurrentUser.EmployeeId,
+                    reservationId,
+                    reservationCode,
+                    guestFullName,
+                    txtEmail.Text.Trim(),
+                    roomNumber,
+                    dtpCheckIn.Value.Date,
+                    dtpCheckOut.Value.Date,
+                    total,
+                    receipt);
+
+                form.ShowDialog(this);
 
                 ClearForm();
                 LoadAvailableRooms();
@@ -350,8 +390,56 @@ namespace HotelMgt.UserControls.Employee
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error creating reservation: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Error generating code:\n{ex}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+
+        //private int CreateGuest(SqlConnection conn, SqlTransaction tx)
+        //{
+        //    using var insertGuest = new SqlCommand(@"
+        //        INSERT INTO Guests (FirstName, LastName, Email, PhoneNumber, IDType, IDNumber, CreatedAt)
+        //        VALUES (@FirstName, @LastName, @Email, @PhoneNumber, @IDType, @IDNumber, @CreatedAt);
+        //        SELECT CAST(SCOPE_IDENTITY() AS INT);", conn, tx);
+
+        //    insertGuest.Parameters.AddWithValue("@FirstName", txtFirstName.Text.Trim());
+        //    insertGuest.Parameters.AddWithValue("@LastName", txtLastName.Text.Trim());
+        //    // Email is required; always supply trimmed value
+        //    insertGuest.Parameters.AddWithValue("@Email", txtEmail.Text.Trim());
+        //    insertGuest.Parameters.AddWithValue("@PhoneNumber", txtPhone.Text.Trim());
+        //    insertGuest.Parameters.AddWithValue("@IDType", cboIDType.SelectedItem?.ToString() ?? "Unknown");
+        //    insertGuest.Parameters.AddWithValue("@IDNumber", string.IsNullOrWhiteSpace(txtIDNumber.Text) ? "N/A" : txtIDNumber.Text.Trim());
+        //    insertGuest.Parameters.AddWithValue("@CreatedAt", DateTime.Now);
+        //    return (int)insertGuest.ExecuteScalar();
+        //}
+
+        private int CreateGuest(SqlConnection conn, SqlTransaction tx)
+        {
+            // Check for existing guest by phone and ID number
+            using (var find = new SqlCommand(@"
+        SELECT TOP 1 GuestID FROM Guests
+        WHERE PhoneNumber = @PhoneNumber AND IDNumber = @IDNumber;", conn, tx))
+            {
+                find.Parameters.AddWithValue("@PhoneNumber", txtPhone.Text.Trim());
+                find.Parameters.AddWithValue("@IDNumber", string.IsNullOrWhiteSpace(txtIDNumber.Text) ? "N/A" : txtIDNumber.Text.Trim());
+                var existing = find.ExecuteScalar();
+                if (existing is int id) return id;
+            }
+
+            // Insert new guest if not found
+            using var insertGuest = new SqlCommand(@"
+        INSERT INTO Guests (FirstName, LastName, Email, PhoneNumber, IDType, IDNumber, CreatedAt)
+        VALUES (@FirstName, @LastName, @Email, @PhoneNumber, @IDType, @IDNumber, @CreatedAt);
+        SELECT CAST(SCOPE_IDENTITY() AS INT);", conn, tx);
+
+            insertGuest.Parameters.AddWithValue("@FirstName", txtFirstName.Text.Trim());
+            insertGuest.Parameters.AddWithValue("@LastName", txtLastName.Text.Trim());
+            insertGuest.Parameters.AddWithValue("@Email", txtEmail.Text.Trim());
+            insertGuest.Parameters.AddWithValue("@PhoneNumber", txtPhone.Text.Trim());
+            insertGuest.Parameters.AddWithValue("@IDType", cboIDType.SelectedItem?.ToString() ?? "Unknown");
+            insertGuest.Parameters.AddWithValue("@IDNumber", string.IsNullOrWhiteSpace(txtIDNumber.Text) ? "N/A" : txtIDNumber.Text.Trim());
+            insertGuest.Parameters.AddWithValue("@CreatedAt", DateTime.Now);
+            return (int)insertGuest.ExecuteScalar();
         }
 
         private void CalculateTotalAmount()
@@ -360,68 +448,131 @@ namespace HotelMgt.UserControls.Employee
             {
                 dynamic room = cboRoom.SelectedItem;
                 int nights = (dtpCheckOut.Value.Date - dtpCheckIn.Value.Date).Days;
-                decimal total = nights * (decimal)room.PricePerNight;
-                lblTotalAmount.Text = $"Total: {total.ToString("C2", _currencyCulture)} ({nights} nights)";
+                decimal pricePerNight = (decimal)room.PricePerNight;
+                decimal downpayment = pricePerNight;
+
+                // Calculate amenities total
+                var selectedAmenities = amenitiesPanel.GetSelectedAmenities();
+                decimal amenitiesTotal = selectedAmenities.Sum(a => a.Price * a.Quantity);
+
+                decimal total = (nights * pricePerNight) + amenitiesTotal - downpayment;
+                if (total < 0) total = 0;
+
+                lblTotalAmount.Text = $"Total: {total.ToString("C2", _currencyCulture)} (after downpayment, {nights} nights, amenities: {amenitiesTotal.ToString("C2", _currencyCulture)})";
+                lblDownpayment.Text = $"Downpayment: {downpayment.ToString("C2", _currencyCulture)}";
             }
             else
             {
                 lblTotalAmount.Text = $"Total: {0m.ToString("C2", _currencyCulture)}";
+                lblDownpayment.Text = $"Downpayment: {0m.ToString("C2", _currencyCulture)}";
             }
         }
 
         private bool ValidateInputs()
         {
-            if (string.IsNullOrWhiteSpace(txtFirstName.Text))
-            {
-                MessageBox.Show("First name is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                txtFirstName.Focus(); return false;
-            }
-            if (string.IsNullOrWhiteSpace(txtLastName.Text))
-            {
-                MessageBox.Show("Last name is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                txtLastName.Focus(); return false;
-            }
-            if (string.IsNullOrWhiteSpace(txtPhone.Text))
-            {
-                MessageBox.Show("Phone number is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                txtPhone.Focus(); return false;
-            }
-            if (dtpCheckIn.Value.Date < DateTime.Today)
-            {
-                MessageBox.Show("Check-in cannot be in the past.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                dtpCheckIn.Focus(); return false;
-            }
-            if (dtpCheckOut.Value.Date <= dtpCheckIn.Value.Date)
-            {
-                MessageBox.Show("Check-out must be after check-in.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                dtpCheckOut.Focus(); return false;
-            }
-            if (cboRoom.SelectedIndex == -1)
-            {
-                MessageBox.Show("Please select a room.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                cboRoom.Focus(); return false;
-            }
+            if (string.IsNullOrWhiteSpace(txtFirstName.Text)) { MessageBox.Show("First name is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning); txtFirstName.Focus(); return false; }
+            if (string.IsNullOrWhiteSpace(txtLastName.Text)) { MessageBox.Show("Last name is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning); txtLastName.Focus(); return false; }
+            if (string.IsNullOrWhiteSpace(txtEmail.Text)) { MessageBox.Show("Email is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning); txtEmail.Focus(); return false; }
+            if (!IsValidEmail(txtEmail.Text.Trim())) { MessageBox.Show("Invalid email format.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning); txtEmail.Focus(); return false; }
+            if (string.IsNullOrWhiteSpace(txtPhone.Text)) { MessageBox.Show("Phone number is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning); txtPhone.Focus(); return false; }
+            if (cboIDType.SelectedIndex == -1) { MessageBox.Show("ID Type is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning); cboIDType.Focus(); return false; }
+            if (string.IsNullOrWhiteSpace(txtIDNumber.Text)) { MessageBox.Show("ID Number is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning); txtIDNumber.Focus(); return false; }
+            if (dtpCheckIn.Value.Date < DateTime.Today) { MessageBox.Show("Check-in cannot be in the past.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning); dtpCheckIn.Focus(); return false; }
+            if (dtpCheckOut.Value.Date <= dtpCheckIn.Value.Date) { MessageBox.Show("Check-out must be after check-in.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning); dtpCheckOut.Focus(); return false; }
+            if (cboRoom.SelectedIndex == -1) { MessageBox.Show("Please select a room.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning); cboRoom.Focus(); return false; }
+
             dynamic room = cboRoom.SelectedItem!;
             if ((int)numGuests.Value > (int)room.MaxOccupancy)
             {
                 MessageBox.Show($"Selected room allows up to {room.MaxOccupancy} guests.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                numGuests.Focus(); return false;
+                numGuests.Focus();
+                return false;
+            }
+            // After guest count check in ValidateInputs()
+            if (cboPaymentMethod.SelectedIndex == -1)
+            {
+                MessageBox.Show("Please select a payment method.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                cboPaymentMethod.Focus();
+                return false;
+            }
+            if (cboPaymentMethod.SelectedItem?.ToString() != "Cash" && string.IsNullOrWhiteSpace(txtTransactionRef.Text))
+            {
+                MessageBox.Show("Transaction Reference is required for non-cash payments.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtTransactionRef.Focus();
+                return false;
             }
             return true;
+        }
+
+        private static bool IsValidEmail(string email)
+        {
+            if (!email.Contains('@')) return false;
+            try
+            {
+                var addr = new MailAddress(email);
+                return addr.Address == email;
+            }
+            catch { return false; }
         }
 
         private void ClearForm()
         {
             txtFirstName.Clear();
+            txtMiddleName.Clear();
             txtLastName.Clear();
             txtEmail.Clear();
             txtPhone.Clear();
+            cboIDType.SelectedIndex = -1;
+            txtIDNumber.Clear();
             dtpCheckIn.Value = DateTime.Today;
             dtpCheckOut.Value = DateTime.Today.AddDays(1);
             cboRoom.SelectedIndex = -1;
             numGuests.Value = 1;
             txtSpecialRequests.Clear();
             lblTotalAmount.Text = $"Total: {0m.ToString("C2", _currencyCulture)}";
+        }
+
+        private void LoadAmenities()
+        {
+            cboAmenities.Items.Clear();
+
+            // Add the "None - PHP0" option first
+            cboAmenities.Items.Add(new
+            {
+                AmenityID = -1,
+                DisplayText = "None"
+            });
+
+            try
+            {
+                using var conn = _dbService.GetConnection();
+                conn.Open();
+                using var cmd = new SqlCommand(@"
+            SELECT AmenityID, Name, Price
+            FROM Amenities
+            WHERE IsActive = 1
+            ORDER BY Name", conn);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    int id = reader.GetInt32(0);
+                    string name = reader.GetString(1);
+                    decimal price = reader.GetDecimal(2);
+                    cboAmenities.Items.Add(new
+                    {
+                        AmenityID = id,
+                        DisplayText = $"{name} - {price.ToString("C2", _currencyCulture)}"
+                    });
+                }
+                cboAmenities.DisplayMember = "DisplayText";
+                cboAmenities.ValueMember = "AmenityID";
+                // Always select "None" by default
+                cboAmenities.SelectedIndex = 0;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error loading amenities: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
     }
 }

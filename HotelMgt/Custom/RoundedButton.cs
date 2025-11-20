@@ -1,8 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -84,11 +80,13 @@ namespace HotelMgt.Custom
             if (borderSize > 0)
                 smoothSize = borderSize;
 
+            var parentBack = Parent?.BackColor ?? BackColor;
+
             if (borderRadius > 2) // Rounded button
             {
                 using (GraphicsPath pathSurface = GetFigurePath(rectSurface, borderRadius))
                 using (GraphicsPath pathBorder = GetFigurePath(rectBorder, borderRadius - borderSize))
-                using (Pen penSurface = new Pen(Parent.BackColor, smoothSize))
+                using (Pen penSurface = new Pen(parentBack, smoothSize))
                 using (Pen penBorder = new Pen(borderColor, borderSize))
                 {
                     pevent.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
@@ -118,15 +116,26 @@ namespace HotelMgt.Custom
                     }
                 }
             }
+
+            // --- Draw the button text (and image if needed) ---
+            TextRenderer.DrawText(
+                pevent.Graphics,
+                this.Text,
+                this.Font,
+                this.ClientRectangle,
+                this.ForeColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine
+            );
         }
 
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            Parent.BackColorChanged += Container_BackColorChanged;
+            if (Parent != null)
+                Parent.BackColorChanged += Container_BackColorChanged;
         }
 
-        private void Container_BackColorChanged(object sender, EventArgs e)
+        private void Container_BackColorChanged(object? sender, EventArgs e)
         {
             Invalidate();
         }

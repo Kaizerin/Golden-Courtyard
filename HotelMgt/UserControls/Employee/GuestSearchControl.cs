@@ -4,8 +4,11 @@ using System.Drawing;
 using System.Text;
 using System.Windows.Forms;
 using System.Globalization;
+using System.Linq; // for OfType/FirstOrDefault
 using Microsoft.Data.SqlClient; // Use Microsoft.Data.SqlClient only
 using HotelMgt.Services;
+using HotelMgt.UIStyles;
+using HotelMgt.Utilities; // for CurrentUser
 
 namespace HotelMgt.UserControls.Employee
 {
@@ -14,13 +17,15 @@ namespace HotelMgt.UserControls.Employee
         private readonly DatabaseService _dbService;
         private readonly CultureInfo _currencyCulture = CultureInfo.GetCultureInfo("en-PH");
 
-        // UI
+        // UI refs (logic keeps these)
         private Label lblTitle = null!, lblSubtitle = null!;
         private TextBox txtSearch = null!;
-        private ComboBox cboSearchBy = null!;
         private Button btnSearch = null!;
         private DataGridView dgvGuests = null!;
-        private DataGridView dgvGuestHistory = null!;
+        private Button? btnDelete; // from builder (Name = "btnDelete")
+
+        // Helper to check role once in one place
+        private static bool IsAdmin => string.Equals(CurrentUser.Role, "Admin", StringComparison.OrdinalIgnoreCase);
 
         public GuestSearchControl()
         {
@@ -31,133 +36,71 @@ namespace HotelMgt.UserControls.Employee
 
         private void GuestSearchControl_Load(object? sender, EventArgs e)
         {
-            InitializeControls();
-            SearchGuests(); // initial load (Figma: default list)
+            // Build UI from UIStyles (includes "btnDelete" beside Search)
+            GuestSearchViewBuilder.Build(
+                this,
+                searchAction: SearchGuests,
+                out lblTitle,
+                out lblSubtitle,
+                out txtSearch,
+                out btnSearch,
+                out dgvGuests);
+
+            // Hook Delete button created by the builder
+            btnDelete = this.Controls.Find("btnDelete", true).OfType<Button>().FirstOrDefault();
+            if (btnDelete != null)
+            {
+                // Only Admins see and can use Delete
+                btnDelete.Visible = IsAdmin;
+                if (IsAdmin)
+                {
+                    btnDelete.Click += (_, __) => DeleteSelectedGuest();
+                }
+            }
+
+            // Grid behavior
+            dgvGuests.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvGuests.MultiSelect = false;
+            dgvGuests.ReadOnly = true;
+
+            // Enable/disable Delete as selection changes
+            dgvGuests.SelectionChanged += (_, __) => UpdateDeleteButtonState();
+
+            // Open history on double-click
+            dgvGuests.CellDoubleClick += DgvGuests_CellDoubleClick;
+            dgvGuests.RowHeaderMouseDoubleClick += DgvGuests_RowHeaderMouseDoubleClick;
+
+            SharedTimerManager.SharedTick += SharedTimerManager_SharedTick;
+
+            SearchGuests();
         }
 
-        private void InitializeControls()
+        private void DgvGuests_CellDoubleClick(object? sender, DataGridViewCellEventArgs e)
         {
-            SuspendLayout();
-            Controls.Clear();
-
-            BackColor = Color.White;
-            Dock = DockStyle.Fill;
-
-            // Title (Figma: page header)
-            lblTitle = new Label
-            {
-                Text = "Guest Search",
-                Font = new Font("Segoe UI", 18, FontStyle.Bold),
-                Location = new Point(20, 20),
-                AutoSize = true
-            };
-            Controls.Add(lblTitle);
-
-            lblSubtitle = new Label
-            {
-                Text = "Search guests by name, email or phone. Select a guest to view their history.",
-                Font = new Font("Segoe UI", 10),
-                ForeColor = Color.Gray,
-                Location = new Point(20, 55),
-                AutoSize = true
-            };
-            Controls.Add(lblSubtitle);
-
-            // Search bar (Figma: search bar + filter)
-            var y = 95;
-
-            Controls.Add(new Label
-            {
-                Text = "Search",
-                Font = new Font("Segoe UI", 9),
-                Location = new Point(20, y),
-                AutoSize = true
-            });
-            txtSearch = new TextBox
-            {
-                Location = new Point(20, y + 22),
-                Size = new Size(360, 25),
-                Font = new Font("Segoe UI", 10),
-                PlaceholderText = "e.g., John, john@acme.com, +1 555..."
-            };
-            txtSearch.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; SearchGuests(); } };
-            Controls.Add(txtSearch);
-
-            Controls.Add(new Label
-            {
-                Text = "Search by",
-                Font = new Font("Segoe UI", 9),
-                Location = new Point(400, y),
-                AutoSize = true
-            });
-            cboSearchBy = new ComboBox
-            {
-                Location = new Point(400, y + 22),
-                Size = new Size(150, 25),
-                Font = new Font("Segoe UI", 10),
-                DropDownStyle = ComboBoxStyle.DropDownList
-            };
-            // Figma: filter options
-            cboSearchBy.Items.AddRange(new object[] { "Name", "Email", "Phone" });
-            cboSearchBy.SelectedIndex = 0;
-            Controls.Add(cboSearchBy);
-
-            btnSearch = new Button
-            {
-                Text = "Search",
-                Location = new Point(570, y + 20),
-                Size = new Size(100, 30),
-                BackColor = Color.FromArgb(37, 99, 235),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
-            };
-            btnSearch.FlatAppearance.BorderSize = 0;
-            btnSearch.Click += (_, __) => SearchGuests();
-            Controls.Add(btnSearch);
-
-            // Guests grid (Figma: left/top table)
-            dgvGuests = new DataGridView
-            {
-                Location = new Point(20, y + 70),
-                Size = new Size(650, 250),
-                BackgroundColor = Color.White,
-                BorderStyle = BorderStyle.None,
-                AllowUserToAddRows = false,
-                AllowUserToDeleteRows = false,
-                ReadOnly = true,
-                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-                MultiSelect = false,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-                RowHeadersVisible = false, // hide left selection indicator column
-                RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.DisableResizing
-            };
-            dgvGuests.SelectionChanged += DgvGuests_SelectionChanged;
-            Controls.Add(dgvGuests);
-
-            // Guest history grid (Figma: bottom table)
-            // Inside InitializeControls(), when creating dgvGuestHistory
-            dgvGuestHistory = new DataGridView
-            {
-                Location = new Point(20, y + 340),
-                Size = new Size(1100, 300),
-                BackgroundColor = Color.White,
-                BorderStyle = BorderStyle.None,
-                AllowUserToAddRows = false,
-                AllowUserToDeleteRows = false,
-                ReadOnly = true,
-                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-                MultiSelect = false,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-                RowHeadersVisible = false, // hide left selection indicator column
-                RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.DisableResizing
-            };
-            Controls.Add(dgvGuestHistory);
-
-            ResumeLayout(false);
-            PerformLayout();
+            if (e.RowIndex < 0) return;
+            OpenGuestHistoryFromSelection();
         }
 
-        // Figma: search executes with selected predicate
+        private void DgvGuests_RowHeaderMouseDoubleClick(object? sender, DataGridViewCellMouseEventArgs e)
+        {
+            if (e.RowIndex < 0) return;
+            OpenGuestHistoryFromSelection();
+        }
+
+        private void OpenGuestHistoryFromSelection()
+        {
+            if (dgvGuests.CurrentRow?.DataBoundItem is not DataRowView drv) return;
+
+            int guestId = drv.Row.Field<int>("GuestID");
+            string first = drv.Row.Field<string?>("FirstName") ?? "";
+            string last = drv.Row.Field<string?>("LastName") ?? "";
+            string guestName = $"{first} {last}".Trim();
+
+            using var dlg = new Dialogs.GuestCheckInHistoryForm(guestId, guestName);
+            dlg.StartPosition = FormStartPosition.CenterParent;
+            dlg.ShowDialog(FindForm());
+        }
+
         private void SearchGuests()
         {
             try
@@ -169,54 +112,48 @@ namespace HotelMgt.UserControls.Employee
                 var cmd = new SqlCommand { Connection = conn };
 
                 string term = txtSearch.Text.Trim();
-                string mode = (cboSearchBy.SelectedItem?.ToString() ?? "Name").ToLowerInvariant();
 
                 if (!string.IsNullOrWhiteSpace(term))
                 {
-                    switch (mode)
-                    {
-                        case "email":
-                            where.Append(" AND Email LIKE @Search");
-                            cmd.Parameters.AddWithValue("@Search", $"%{term}%");
-                            break;
-                        case "phone":
-                            where.Append(" AND PhoneNumber LIKE @Search");
-                            cmd.Parameters.AddWithValue("@Search", $"%{term}%");
-                            break;
-                        default: // name
-                            where.Append(" AND (FirstName LIKE @Name OR LastName LIKE @Name OR (FirstName + ' ' + LastName) LIKE @Name)");
-                            cmd.Parameters.AddWithValue("@Name", $"%{term}%");
-                            break;
-                    }
+                    where.Append(@"
+                     AND (
+                         FirstName LIKE @Term
+                      OR MiddleName LIKE @Term
+                      OR LastName LIKE @Term
+                      OR (FirstName + ' ' + MiddleName + ' ' + LastName) LIKE @Term
+                      OR (FirstName + ' ' + LastName) LIKE @Term
+                      OR Email LIKE @Term
+                      OR PhoneNumber LIKE @Term
+                      OR IDNumber LIKE @Term
+                     )");
+                    cmd.Parameters.AddWithValue("@Term", $"%{term}%");
                 }
 
                 cmd.CommandText = $@"
-                    SELECT 
-                        GuestID,
-                        (FirstName + ' ' + LastName) AS GuestName,
-                        Email,
-                        PhoneNumber,
-                        CreatedAt
-                    FROM Guests
-                    {where}
-                    ORDER BY CreatedAt DESC";
+                        SELECT 
+                            GuestID,
+                            FirstName,
+                            MiddleName,
+                            LastName,
+                            Email,
+                            PhoneNumber,
+                            IDType,
+                            IDNumber
+                        FROM Guests
+                        {where}
+                        ORDER BY CreatedAt DESC";
 
                 using var adapter = new SqlDataAdapter(cmd);
-                var dt = new DataTable();
-                adapter.Fill(dt);
+                var raw = new DataTable();
+                adapter.Fill(raw);
 
-                dgvGuests.DataSource = dt;
+                // Bind the raw data; formatting is handled by the builder's grid setup
+                dgvGuests.DataSource = raw;
 
-                if (dgvGuests.Columns.Contains("GuestID"))
-                    dgvGuests.Columns["GuestID"].Visible = false;
-                if (dgvGuests.Columns.Contains("GuestName"))
-                    dgvGuests.Columns["GuestName"].HeaderText = "Guest";
-                if (dgvGuests.Columns.Contains("Email"))
-                    dgvGuests.Columns["Email"].HeaderText = "Email";
-                if (dgvGuests.Columns.Contains("PhoneNumber"))
-                    dgvGuests.Columns["PhoneNumber"].HeaderText = "Phone";
-                if (dgvGuests.Columns.Contains("CreatedAt"))
-                    dgvGuests.Columns["CreatedAt"].HeaderText = "Created";
+                // Allow wrapping for contact/email if needed
+                dgvGuests.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
+
+                UpdateDeleteButtonState();
             }
             catch (Exception ex)
             {
@@ -224,86 +161,144 @@ namespace HotelMgt.UserControls.Employee
             }
         }
 
-        // Figma: selecting a guest loads combined Reservations + CheckIns history
-        private void DgvGuests_SelectionChanged(object? sender, EventArgs e)
+        private void UpdateDeleteButtonState()
         {
-            if (dgvGuests.SelectedRows.Count == 0) return;
-            var row = dgvGuests.SelectedRows[0];
-            if (row.Cells["GuestID"].Value is null) return;
+            if (btnDelete == null) return;
 
-            int guestId = Convert.ToInt32(row.Cells["GuestID"].Value);
-            ShowGuestHistory(guestId);
+            if (!IsAdmin)
+            {
+                btnDelete.Enabled = false;
+                return;
+            }
+
+            bool enabled = dgvGuests?.CurrentRow?.DataBoundItem is DataRowView;
+            btnDelete.Enabled = enabled;
+            btnDelete.BackColor = enabled ? Color.FromArgb(220, 38, 38) : Color.FromArgb(200, 200, 200);
         }
 
-        private void ShowGuestHistory(int guestId)
+        private void DeleteSelectedGuest()
         {
+            if (!IsAdmin)
+            {
+                MessageBox.Show("Only admins can delete guests.", "Access Denied",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (dgvGuests.CurrentRow?.DataBoundItem is not DataRowView drv)
+            {
+                MessageBox.Show("Select a guest first.", "Delete Guest",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            int guestId = drv.Row.Field<int>("GuestID");
+            string first = drv.Row.Field<string?>("FirstName") ?? "";
+            string last = drv.Row.Field<string?>("LastName") ?? "";
+            string guestName = (first + " " + last).Trim();
+
+            var confirm = MessageBox.Show(
+                $"Delete guest '{guestName}' (ID {guestId}) and ALL their history (reservations, check-ins, amenities, payments)?\n\nThis cannot be undone.",
+                "Confirm Delete",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (confirm != DialogResult.Yes) return;
+
             try
             {
                 using var conn = _dbService.GetConnection();
                 conn.Open();
 
-                // Combine Reservations and CheckIns history (Figma: unified timeline)
-                string query = @"
-                    SELECT 
-                        'Reservation' AS [Type],
-                        r.ReservationID AS [RefId],
-                        rm.RoomNumber,
-                        r.CheckInDate,
-                        r.CheckOutDate,
-                        r.ReservationStatus AS [Status],
-                        r.TotalAmount AS [Amount]
-                    FROM Reservations r
-                    INNER JOIN Rooms rm ON r.RoomID = rm.RoomID
-                    WHERE r.GuestID = @GuestID
-
-                    UNION ALL
-
-                    SELECT 
-                        'Stay' AS [Type],
-                        c.CheckInID AS [RefId],
-                        rm.RoomNumber,
-                        CAST(c.CheckInDateTime AS DATE) AS CheckInDate,
-                        c.ExpectedCheckOutDate AS CheckOutDate,
-                        CASE WHEN c.ActualCheckOutDateTime IS NULL THEN 'Active' ELSE 'Completed' END AS [Status],
-                        CAST(DATEDIFF(DAY, CAST(c.CheckInDateTime AS DATE), ISNULL(CAST(c.ActualCheckOutDateTime AS DATE), CAST(GETDATE() AS DATE))) AS DECIMAL(10,2)) * rm.PricePerNight AS [Amount]
-                    FROM CheckIns c
-                    INNER JOIN Rooms rm ON c.RoomID = rm.RoomID
-                    WHERE c.GuestID = @GuestID
-
-                    ORDER BY CheckInDate DESC";
-
-                using var cmd = new SqlCommand(query, conn);
-                cmd.Parameters.AddWithValue("@GuestID", guestId);
-
-                using var adapter = new SqlDataAdapter(cmd);
-                var dt = new DataTable();
-                adapter.Fill(dt);
-
-                dgvGuestHistory.DataSource = dt;
-
-                if (dgvGuestHistory.Columns.Contains("RefId"))
-                    dgvGuestHistory.Columns["RefId"].Visible = false;
-                if (dgvGuestHistory.Columns.Contains("Type"))
-                    dgvGuestHistory.Columns["Type"].HeaderText = "Type";
-                if (dgvGuestHistory.Columns.Contains("RoomNumber"))
-                    dgvGuestHistory.Columns["RoomNumber"].HeaderText = "Room";
-                if (dgvGuestHistory.Columns.Contains("CheckInDate"))
-                    dgvGuestHistory.Columns["CheckInDate"].HeaderText = "Check-In";
-                if (dgvGuestHistory.Columns.Contains("CheckOutDate"))
-                    dgvGuestHistory.Columns["CheckOutDate"].HeaderText = "Check-Out";
-                if (dgvGuestHistory.Columns.Contains("Status"))
-                    dgvGuestHistory.Columns["Status"].HeaderText = "Status";
-                if (dgvGuestHistory.Columns.Contains("Amount"))
+                // 1) Block if there are active check-ins (still in-house)
+                using (var checkCmd = new SqlCommand(
+                    "SELECT COUNT(*) FROM CheckIns WHERE GuestID = @Id AND ActualCheckOutDateTime IS NULL;", conn))
                 {
-                    dgvGuestHistory.Columns["Amount"].HeaderText = "Amount";
-                    dgvGuestHistory.Columns["Amount"].DefaultCellStyle.Format = "C2";
-                    dgvGuestHistory.Columns["Amount"].DefaultCellStyle.FormatProvider = _currencyCulture; // ensure ₱
+                    checkCmd.Parameters.AddWithValue("@Id", guestId);
+                    var activeCount = (int)(checkCmd.ExecuteScalar() ?? 0);
+                    if (activeCount > 0)
+                    {
+                        MessageBox.Show(
+                            "Cannot delete this guest because they have active check-in(s). Please check them out or cancel related stays first.",
+                            "Delete Blocked",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        return;
+                    }
                 }
+
+                using var tx = conn.BeginTransaction();
+
+                try
+                {
+                    // 2) Cascade delete (manual) in safe FK order
+                    // Payments referencing guest or any of the guest's reservations
+                    using (var cmd = new SqlCommand(@"
+DELETE FROM CheckInAmenities
+WHERE CheckInID IN (SELECT CheckInID FROM CheckIns WHERE GuestID = @GuestID);
+
+DELETE FROM Payments
+WHERE GuestID = @GuestID
+   OR ReservationID IN (SELECT ReservationID FROM Reservations WHERE GuestID = @GuestID);
+
+DELETE FROM CheckIns
+WHERE GuestID = @GuestID;
+
+DELETE FROM Reservations
+WHERE GuestID = @GuestID;
+
+DELETE FROM Guests
+WHERE GuestID = @GuestID;", conn, tx))
+                    {
+                        cmd.Parameters.AddWithValue("@GuestID", guestId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    tx.Commit();
+                }
+                catch
+                {
+                    try { tx.Rollback(); } catch { }
+                    throw;
+                }
+
+                MessageBox.Show("Guest and all related history deleted.", "Success",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                SearchGuests();
+            }
+            catch (SqlException sx)
+            {
+                MessageBox.Show(
+                    $"Delete failed: {sx.Message}",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error loading guest history: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Error deleting guest: {ex.Message}",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            finally
+            {
+                UpdateDeleteButtonState();
             }
         }
+
+        // Optional leftovers
+        private void DgvGuests_SelectionChanged(object? sender, EventArgs e) { /* no-op */ }
+        private void ShowGuestHistory(int guestId) { /* stub */ }
+
+        private void SharedTimerManager_SharedTick(object? sender, EventArgs e)
+        {
+            if (this.Visible && this.Parent?.Visible == true)
+            {
+                   // Optionally check for changes before refreshing
+                   SearchGuests();
+               }
+           }
     }
 }

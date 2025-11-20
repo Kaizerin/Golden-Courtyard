@@ -11,19 +11,24 @@ namespace HotelMgt.Forms
     public partial class LoginForm : Form
     {
         private readonly AuthenticationService _authService;
-        private PictureBox _logoPb; // host the image so custom painting doesn't hide it
+        private PictureBox _logoPb = null!; // initialized in CreateLogoHost
 
         public LoginForm()
         {
             InitializeComponent();
             _authService = new AuthenticationService();
             CreateLogoHost();
-            this.Load += LoginForm_Load; // ensure hooked
+
+            this.Load += LoginForm_Load;
+
+
+            txtUsername.KeyDown += txtUsername_KeyDown;
+            txtPassword.KeyDown += txtPassword_KeyDown;
+
         }
 
         private void CreateLogoHost()
         {
-            // Ensure the rounded panel hosts a PictureBox that handles the image
             _logoPb = new PictureBox
             {
                 Dock = DockStyle.Fill,
@@ -31,12 +36,12 @@ namespace HotelMgt.Forms
                 BackColor = Color.Transparent
             };
 
-            panelLogo.BackgroundImage = null; // use PictureBox instead of BackgroundImage
+            panelLogo.BackgroundImage = null;
             panelLogo.Controls.Clear();
             panelLogo.Controls.Add(_logoPb);
         }
 
-        private void LoginForm_Load(object sender, EventArgs e)
+        private void LoginForm_Load(object? sender, EventArgs e)
         {
             // Test database connection
             var dbService = new DatabaseService();
@@ -65,13 +70,12 @@ namespace HotelMgt.Forms
                 using (var fs = new FileStream(imagePath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var temp = Image.FromStream(fs))
                 {
-                    _logoPb.Image = new Bitmap(temp); // clone to avoid locking the file
+                    _logoPb.Image = new Bitmap(temp);
                 }
                 return;
             }
 
 #if DEBUG
-            // Dev fallback when running from bin: try project Images folder
             string devPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\..\Images\panelLogo.png"));
             if (File.Exists(devPath))
             {
@@ -113,7 +117,6 @@ namespace HotelMgt.Forms
                 {
                     this.Hide();
 
-                    // Open appropriate dashboard based on role
                     if (employee.Role == Constants.RoleAdmin)
                     {
                         var adminDashboard = new AdminDashboardForm();
@@ -154,12 +157,31 @@ namespace HotelMgt.Forms
             }
         }
 
-        private void txtPassword_KeyPress(object sender, KeyPressEventArgs e)
+        private void txtUsername_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.KeyChar == (char)Keys.Enter)
+            if (e.KeyCode == Keys.Enter)
             {
+                e.SuppressKeyPress = true; // removes the ding sound
+                txtPassword.Focus();
+            }
+        }
+
+
+
+        private void txtPassword_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true; // removes ding
                 btnLogin_Click(sender, e);
             }
+        }
+
+
+
+        private void chkShowPassword_CheckedChanged(object? sender, EventArgs e)
+        {
+            txtPassword.PasswordChar = !chkShowPassword.Checked;
         }
     }
 }

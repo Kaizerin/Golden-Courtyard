@@ -29,13 +29,13 @@
             tabRevenueReport = new TabPage();
             panelHeader = new Panel();
             btnLogout = new HotelMgt.Custom.RoundedButton();
-            lblRole = new Label();
             lblWelcome = new Label();
             lblTitle = new Label();
             tabControl.SuspendLayout();
             panelHeader.SuspendLayout();
             SuspendLayout();
-            // 
+            this.WindowState = FormWindowState.Maximized;
+            this.MaximizeBox = false; // disables the maximize/restore button            // 
             // tabControl
             // 
             tabControl.Controls.Add(tabOverview);
@@ -52,7 +52,7 @@
             tabControl.Location = new Point(0, 70);
             tabControl.Name = "tabControl";
             tabControl.SelectedIndex = 0;
-            tabControl.Size = new Size(1384, 791);
+            tabControl.Size = new Size(1200, 630);
             tabControl.TabIndex = 1;
             tabControl.SelectedIndexChanged += tabControl_SelectedIndexChanged;
             // 
@@ -60,7 +60,7 @@
             // 
             tabOverview.Location = new Point(4, 26);
             tabOverview.Name = "tabOverview";
-            tabOverview.Size = new Size(1376, 761);
+            tabOverview.Size = new Size(1192, 600);
             tabOverview.TabIndex = 9;
             tabOverview.Text = "Overview";
             tabOverview.UseVisualStyleBackColor = true;
@@ -100,7 +100,7 @@
             tabAvailableRooms.Name = "tabAvailableRooms";
             tabAvailableRooms.Size = new Size(1376, 761);
             tabAvailableRooms.TabIndex = 3;
-            tabAvailableRooms.Text = "Available Rooms";
+            tabAvailableRooms.Text = "Rooms";
             tabAvailableRooms.UseVisualStyleBackColor = true;
             // 
             // tabGuestSearch
@@ -127,7 +127,7 @@
             tabRoomManagement.Name = "tabRoomManagement";
             tabRoomManagement.Size = new Size(1376, 761);
             tabRoomManagement.TabIndex = 6;
-            tabRoomManagement.Text = "Rooms";
+            tabRoomManagement.Text = "Rooms Mgmt";
             tabRoomManagement.UseVisualStyleBackColor = true;
             // 
             // tabRevenueReport
@@ -141,17 +141,15 @@
             // 
             // panelHeader
             // 
-            panelHeader.BackColor = Color.FromArgb(37, 99, 235);
+            panelHeader.BackColor = Color.Navy;
             panelHeader.Controls.Add(btnLogout);
-            panelHeader.Controls.Add(lblRole);
             panelHeader.Controls.Add(lblWelcome);
             panelHeader.Controls.Add(lblTitle);
             panelHeader.Dock = DockStyle.Top;
             panelHeader.Location = new Point(0, 0);
             panelHeader.Name = "panelHeader";
-            panelHeader.Size = new Size(1384, 70);
+            panelHeader.Size = new Size(1200, 70);
             panelHeader.TabIndex = 0;
-            panelHeader.Resize += PanelHeader_Resize;
             // 
             // btnLogout
             // 
@@ -164,27 +162,12 @@
             btnLogout.FlatStyle = FlatStyle.Flat;
             btnLogout.Font = new Font("Segoe UI", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 0);
             btnLogout.ForeColor = Color.White;
-            btnLogout.Location = new Point(1250, 15);
+            btnLogout.Location = new Point(1066, 15);
             btnLogout.Name = "btnLogout";
             btnLogout.Size = new Size(120, 40);
             btnLogout.TabIndex = 3;
             btnLogout.Text = "Logout";
             btnLogout.UseVisualStyleBackColor = false;
-            // 
-            // lblRole
-            // 
-            lblRole.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            lblRole.AutoSize = true;
-            lblRole.BackColor = Color.FromArgb(59, 130, 246);
-            lblRole.BorderStyle = BorderStyle.FixedSingle;
-            lblRole.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            lblRole.ForeColor = Color.Snow;
-            lblRole.Location = new Point(1150, 20);
-            lblRole.Name = "lblRole";
-            lblRole.Size = new Size(50, 17);
-            lblRole.TabIndex = 2;
-            lblRole.Text = "ADMIN";
-            lblRole.TextAlign = ContentAlignment.MiddleCenter;
             // 
             // lblWelcome
             // 
@@ -205,17 +188,17 @@
             lblTitle.Name = "lblTitle";
             lblTitle.Size = new Size(200, 30);
             lblTitle.TabIndex = 0;
-            lblTitle.Text = "Admin Dashboard";
+            lblTitle.Text = "Golden Courtyard";
             // 
             // AdminDashboardForm
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             BackColor = Color.FromArgb(240, 244, 248);
-            ClientSize = new Size(1384, 861);
+            ClientSize = new Size(1200, 700);
             Controls.Add(tabControl);
             Controls.Add(panelHeader);
-            MinimumSize = new Size(1200, 700);
+            MinimumSize = new Size(900, 600);
             Name = "AdminDashboardForm";
             StartPosition = FormStartPosition.CenterScreen;
             Text = "Hotel Management - Admin Dashboard";
@@ -243,7 +226,6 @@
         private Panel panelHeader;
         private Label lblWelcome;
         private Label lblTitle;
-        private Label lblRole;
         private Custom.RoundedButton btnLogout;
     }
 }

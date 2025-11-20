@@ -6,223 +6,102 @@ using System.Windows.Forms;
 using Microsoft.Data.SqlClient; // Use Microsoft.Data.SqlClient only
 using HotelMgt.Services;
 using System.Globalization; // ADD
-using System.Drawing.Drawing2D; // ADD
-using HotelMgt.Custom; // ADD (RoundedPanel)
+using HotelMgt.Custom; // RoundedPanel
+using HotelMgt.UIStyles; // ADD
+using HotelMgt.Core.Events;
+using HotelMgt.Utilities;
 
 namespace HotelMgt.UserControls.Employee
 {
     public partial class AvailableRoomsControl : UserControl
     {
         private readonly DatabaseService _dbService;
-        private readonly CultureInfo _currencyCulture = CultureInfo.GetCultureInfo("en-PH"); // ADD
+        private readonly CultureInfo _currencyCulture = CultureInfo.GetCultureInfo("en-PH");
 
-        // UI
+        // UI refs (logic keeps these)
         private Label lblTitle = null!, lblSubtitle = null!;
-        private Label lblSummary = null!; // ADD: "Showing X of Y"
-        private Label lblSearchTitle = null!, lblStatusTitle = null!, lblTypeTitle = null!; // section labels
-        private TextBox txtSearch = null!; // ADD: Search by room number
+        private Label lblSummary = null!;
+        private TextBox txtSearch = null!;
         private ComboBox cboFilterStatus = null!, cboFilterType = null!;
         private DataGridView dgvRooms = null!;
 
-        // NEW: Amenities side panel
+        // Amenities side panel
         private RoundedPanel pnlAmenities = null!;
         private Label lblAmenitiesTitle = null!;
         private Label lblAmenitiesText = null!;
+        private Label lblDescriptionTitle = null!; // NEW
+        private Label lblDescriptionText = null!;  // NEW
+
+        private readonly BindingSource _roomsSource = new();
+
+        private DateTime? _lastRoomsUpdatedAt;
 
         public AvailableRoomsControl()
         {
             InitializeComponent();
             _dbService = new DatabaseService();
+
             this.Load += AvailableRoomsControl_Load;
+
+            // Subscribe to cross-module room changes and refresh this view
+            RoomEvents.RoomsChanged += OnRoomsChanged;
+            Disposed += (_, __) => RoomEvents.RoomsChanged -= OnRoomsChanged;
+
+            // Subscribe to shared timer for periodic refresh
+            SharedTimerManager.SharedTick += SharedTimerManager_SharedTick;
+            Disposed += (_, __) => SharedTimerManager.SharedTick -= SharedTimerManager_SharedTick;
+        }
+
+        private void OnRoomsChanged(object? sender, RoomsChangedEventArgs e)
+        {
+            // Marshal to UI thread if needed
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(LoadRooms));
+                return;
+            }
+            LoadRooms();
         }
 
         private void AvailableRoomsControl_Load(object? sender, EventArgs e)
         {
-            InitializeControls();
-            LoadRoomTypes();     // Populate type filter
-            LoadRooms();         // Initial grid load
-        }
+            // Build UI via UIStyles builder
+            AvailableRoomsViewBuilder.Build(
+                this,
+                out lblTitle,
+                out lblSubtitle,
+                out lblSummary,
+                out txtSearch,
+                out cboFilterStatus,
+                out cboFilterType,
+                out dgvRooms,
+                out pnlAmenities,
+                out lblAmenitiesTitle,
+                out lblAmenitiesText,
+                out lblDescriptionTitle,
+                out lblDescriptionText);
 
-        private void InitializeControls()
-        {
-            SuspendLayout();
-            Controls.Clear();
+            // Bind the DataGridView after it exists
+            dgvRooms.DataSource = _roomsSource;
 
-            BackColor = Color.White;
-            Dock = DockStyle.Fill;
-
-            // Title
-            lblTitle = new Label
-            {
-                Text = "Room Inventory",
-                Font = new Font("Segoe UI", 18, FontStyle.Bold),
-                Location = new Point(20, 20),
-                AutoSize = true
-            };
-            Controls.Add(lblTitle);
-
-            lblSubtitle = new Label
-            {
-                Text = "View and filter all hotel rooms",
-                Font = new Font("Segoe UI", 10),
-                ForeColor = Color.Gray,
-                Location = new Point(20, 55),
-                AutoSize = true
-            };
-            Controls.Add(lblSubtitle);
-
-            // Header row labels: Search | Status | Type
-            var y = 95;
-            lblSearchTitle = new Label { Text = "Search Rooms", Font = new Font("Segoe UI", 9), Location = new Point(20, y), AutoSize = true };
-            Controls.Add(lblSearchTitle);
-            lblStatusTitle = new Label { Text = "Filter by Status", Font = new Font("Segoe UI", 9), Location = new Point(340, y), AutoSize = true };
-            Controls.Add(lblStatusTitle);
-            lblTypeTitle = new Label { Text = "Filter by Type", Font = new Font("Segoe UI", 9), Location = new Point(620, y), AutoSize = true };
-            Controls.Add(lblTypeTitle);
-
-            // Controls row: Search textbox | Status combo | Type combo
-            txtSearch = new TextBox
-            {
-                Location = new Point(20, y + 22),
-                Size = new Size(300, 25),
-                Font = new Font("Segoe UI", 10),
-                PlaceholderText = "Search by room number"
-            };
+            // Wire events to logic
             txtSearch.TextChanged += (_, __) => LoadRooms();
-            Controls.Add(txtSearch);
-
-            cboFilterStatus = new ComboBox
-            {
-                Location = new Point(340, y + 22),
-                Size = new Size(220, 25),
-                Font = new Font("Segoe UI", 10),
-                DropDownStyle = ComboBoxStyle.DropDownList
-            };
-            // Required order per design
-            cboFilterStatus.Items.AddRange(new object[] { "All Statuses", "Available", "Occupied", "Reserved", "Maintenance" });
-            cboFilterStatus.SelectedIndex = 0;
             cboFilterStatus.SelectedIndexChanged += (_, __) => LoadRooms();
-            Controls.Add(cboFilterStatus);
-
-            cboFilterType = new ComboBox
-            {
-                Location = new Point(620, y + 22),
-                Size = new Size(220, 25),
-                Font = new Font("Segoe UI", 10),
-                DropDownStyle = ComboBoxStyle.DropDownList
-            };
-            // Values per design; includes "All Types" for convenience
-            cboFilterType.Items.AddRange(new object[] { "All Types", "Single", "Double", "Suite", "Deluxe" });
-            cboFilterType.SelectedIndex = 0;
             cboFilterType.SelectedIndexChanged += (_, __) => LoadRooms();
-            Controls.Add(cboFilterType);
-
-            // Summary: "Showing [Number] of [Number] rooms"
-            lblSummary = new Label
-            {
-                Text = "Showing 0 of 0 rooms",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.FromArgb(100, 116, 139),
-                Location = new Point(20, y + 22 + 35),
-                AutoSize = true
-            };
-            Controls.Add(lblSummary);
-
-            // Layout numbers
-            int gridX = 20;
-            int gridY = y + 22 + 60;
-            int gridWidth = 780;  // shrink table to leave space on the right
-            int gridHeight = 520;
-            int gap = 20;
-
-            // Grid
-            dgvRooms = new DataGridView
-            {
-                Location = new Point(gridX, gridY),
-                Size = new Size(gridWidth, gridHeight),
-                BackgroundColor = Color.White,
-                BorderStyle = BorderStyle.None,
-                AllowUserToAddRows = false,
-                AllowUserToDeleteRows = false,
-                ReadOnly = true,
-                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-                MultiSelect = false,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-                RowHeadersVisible = false, // hide the left indicator column
-                RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.DisableResizing,
-                DefaultCellStyle = { WrapMode = DataGridViewTriState.True },
-                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
-            };
-            dgvRooms.SelectionChanged -= DgvRooms_SelectionChanged;
             dgvRooms.SelectionChanged += DgvRooms_SelectionChanged;
-            Controls.Add(dgvRooms);
 
-            // Amenities panel (right)
-            pnlAmenities = new RoundedPanel
-            {
-                BorderRadius = 12,
-                BackColor = Color.White,
-                Location = new Point(dgvRooms.Right + gap, gridY),
-                Size = new Size(Math.Max(260, Width - (dgvRooms.Right + gap + 40)), gridHeight) // responsive width
-            };
-            AttachRoundedBorder(pnlAmenities, 12, Color.FromArgb(220, 225, 235));
-            Controls.Add(pnlAmenities);
-
-            lblAmenitiesTitle = new Label
-            {
-                Text = "Amenities",
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                ForeColor = Color.FromArgb(30, 41, 59),
-                Location = new Point(14, 12),
-                AutoSize = true
-            };
-            pnlAmenities.Controls.Add(lblAmenitiesTitle);
-
-            lblAmenitiesText = new Label
-            {
-                Text = "Select a room to view amenities.",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.FromArgb(55, 65, 81),
-                Location = new Point(16, 44),
-                AutoSize = true,
-                MaximumSize = new Size(pnlAmenities.Width - 32, 0) // wrap inside panel
-            };
-            pnlAmenities.Controls.Add(lblAmenitiesText);
-
-            // Keep amenities panel responsive on control resize
-            this.Resize -= AvailableRoomsControl_Resize;
-            this.Resize += AvailableRoomsControl_Resize;
-
-            ResumeLayout(false);
-            PerformLayout();
+            LoadRoomTypes();
+            LoadRooms();
         }
 
-        private void AvailableRoomsControl_Resize(object? sender, EventArgs e)
+        private void LoadRoomTypes() { }
+
+        internal void LoadRooms()
         {
-            if (dgvRooms == null || pnlAmenities == null) return;
+            // Defensive: Only proceed if all required controls are initialized
+            if (txtSearch == null || cboFilterStatus == null || cboFilterType == null || dgvRooms == null)
+                return;
 
-            // Keep a nice right panel width while grid stays fixed width
-            int gap = 20;
-            pnlAmenities.Location = new Point(dgvRooms.Right + gap, dgvRooms.Top);
-            pnlAmenities.Size = new Size(Math.Max(260, this.Width - (pnlAmenities.Left + 20)), dgvRooms.Height);
-
-            // Re-wrap amenities text
-            if (lblAmenitiesText != null)
-            {
-                lblAmenitiesText.MaximumSize = new Size(pnlAmenities.Width - 32, 0);
-            }
-        }
-
-        // Populate Type filter (per design)
-        private void LoadRoomTypes()
-        {
-            // Using static list already set in InitializeControls; keep method for symmetry/extension.
-            // If you want dynamic types from DB, replace items here accordingly.
-        }
-
-        // Load grid with filters applied + update summary
-        private void LoadRooms()
-        {
             try
             {
                 using var conn = _dbService.GetConnection();
@@ -237,13 +116,14 @@ namespace HotelMgt.UserControls.Employee
                         MaxOccupancy,
                         Status,
                         Floor,
-                        Amenities
+                        Amenities,
+                        Description,
+                        UpdatedAt
                     FROM Rooms
                     WHERE 1=1");
 
                 using var cmd = new SqlCommand { Connection = conn };
 
-                // Search by RoomNumber
                 var term = txtSearch.Text.Trim();
                 if (!string.IsNullOrEmpty(term))
                 {
@@ -251,18 +131,16 @@ namespace HotelMgt.UserControls.Employee
                     cmd.Parameters.AddWithValue("@Search", $"%{term}%");
                 }
 
-                // Status filter (skip when "All Statuses")
                 if (cboFilterStatus.SelectedIndex > 0)
                 {
                     sb.Append(" AND Status = @Status");
-                    cmd.Parameters.AddWithValue("@Status", cboFilterStatus.SelectedItem!.ToString());
+                    cmd.Parameters.AddWithValue("@Status", Convert.ToString(cboFilterStatus.SelectedItem) ?? string.Empty);
                 }
 
-                // Type filter (skip when "All Types")
                 if (cboFilterType.SelectedIndex > 0)
                 {
                     sb.Append(" AND RoomType = @RoomType");
-                    cmd.Parameters.AddWithValue("@RoomType", cboFilterType.SelectedItem!.ToString());
+                    cmd.Parameters.AddWithValue("@RoomType", Convert.ToString(cboFilterType.SelectedItem) ?? string.Empty);
                 }
 
                 sb.Append(" ORDER BY RoomNumber");
@@ -272,68 +150,73 @@ namespace HotelMgt.UserControls.Employee
                 var dt = new DataTable();
                 adapter.Fill(dt);
 
-                dgvRooms.DataSource = dt;
+                // Bind via BindingSource (keeps the grid instance stable)
+                _roomsSource.SuspendBinding();
+                _roomsSource.DataSource = dt;
+                _roomsSource.ResumeBinding();
 
-                // Headers and formatting
-                if (dgvRooms.Columns.Contains("RoomID"))
-                    dgvRooms.Columns["RoomID"].Visible = false;
+                // Safe column access pattern
+                var cols = dgvRooms.Columns;
 
-                if (dgvRooms.Columns.Contains("RoomNumber"))
+                if (cols["RoomID"] is { } colRoomId)
+                    colRoomId.Visible = false;
+
+                if (cols["RoomNumber"] is { } colRoomNumber)
                 {
-                    var c = dgvRooms.Columns["RoomNumber"];
-                    c.HeaderText = "Room";
-                    c.FillWeight = 85; // narrower
-                    c.MinimumWidth = 90;
+                    colRoomNumber.HeaderText = "Room";
+                    colRoomNumber.FillWeight = 85;
+                    colRoomNumber.MinimumWidth = 90;
+                    colRoomNumber.Resizable = DataGridViewTriState.False;
                 }
 
-                if (dgvRooms.Columns.Contains("RoomType"))
+                if (cols["RoomType"] is { } colRoomType)
                 {
-                    var c = dgvRooms.Columns["RoomType"];
-                    c.HeaderText = "Type";
-                    c.FillWeight = 80; // narrower
-                    c.MinimumWidth = 90;
+                    colRoomType.HeaderText = "Type";
+                    colRoomType.FillWeight = 80;
+                    colRoomType.MinimumWidth = 90;
+                    colRoomType.Resizable = DataGridViewTriState.False;
                 }
 
-                if (dgvRooms.Columns.Contains("Floor"))
+                if (cols["Floor"] is { } colFloor)
                 {
-                    var c = dgvRooms.Columns["Floor"];
-                    c.HeaderText = "Floor";
-                    c.FillWeight = 60; // narrow
-                    c.MinimumWidth = 70;
+                    colFloor.HeaderText = "Floor";
+                    colFloor.FillWeight = 60;
+                    colFloor.MinimumWidth = 70;
+                    colFloor.Resizable = DataGridViewTriState.False;
                 }
 
-                if (dgvRooms.Columns.Contains("MaxOccupancy"))
+                if (cols["MaxOccupancy"] is { } colMaxOcc)
                 {
-                    var c = dgvRooms.Columns["MaxOccupancy"];
-                    c.HeaderText = "Max Guests";
-                    c.FillWeight = 90; // narrow
-                    c.MinimumWidth = 100;
+                    colMaxOcc.HeaderText = "Max Guests";
+                    colMaxOcc.FillWeight = 90;
+                    colMaxOcc.MinimumWidth = 100;
+                    colMaxOcc.Resizable = DataGridViewTriState.False;
                 }
 
-                if (dgvRooms.Columns.Contains("Status"))
+                if (cols["Status"] is { } colStatus)
                 {
-                    var c = dgvRooms.Columns["Status"];
-                    c.HeaderText = "Status";
-                    c.FillWeight = 110;
+                    colStatus.HeaderText = "Status";
+                    colStatus.FillWeight = 110;
+                    colStatus.Resizable = DataGridViewTriState.False;
                 }
 
-                if (dgvRooms.Columns.Contains("PricePerNight"))
+                if (cols["PricePerNight"] is { } colPrice)
                 {
-                    var c = dgvRooms.Columns["PricePerNight"];
-                    c.HeaderText = "Rate/Night";
-                    c.DefaultCellStyle.Format = "C2";
-                    c.DefaultCellStyle.FormatProvider = _currencyCulture; // ₱
-                    c.FillWeight = 120;
-                    c.MinimumWidth = 120;
+                    colPrice.HeaderText = "Rate/Night";
+                    colPrice.DefaultCellStyle.Format = "C2";
+                    colPrice.DefaultCellStyle.FormatProvider = _currencyCulture;
+                    colPrice.FillWeight = 120;
+                    colPrice.MinimumWidth = 120;
+                    colPrice.Resizable = DataGridViewTriState.False;
                 }
 
-                // Hide Amenities in table; show beautifully on the right panel
-                if (dgvRooms.Columns.Contains("Amenities"))
-                {
-                    dgvRooms.Columns["Amenities"].Visible = false;
-                }
+                // Hide details in table; show on right
+                if (cols["Amenities"] is { } colAmenities)
+                    colAmenities.Visible = false;
+                if (cols["Description"] is { } colDescription)
+                    colDescription.Visible = false;
 
-                // Update summary
+                // Summary
                 int totalRooms;
                 using (var countCmd = new SqlCommand("SELECT COUNT(*) FROM Rooms", conn))
                 {
@@ -341,8 +224,15 @@ namespace HotelMgt.UserControls.Employee
                 }
                 lblSummary.Text = $"Showing {dt.Rows.Count} of {totalRooms} rooms";
 
-                // Update amenities view for current selection (if any)
-                UpdateAmenitiesFromSelection();
+                // Initialize side panel content and layout
+                UpdateSidePanelFromSelection();
+
+                // After adapter.Fill(dt);
+                _lastRoomsUpdatedAt = dt.AsEnumerable()
+                    .Select(r => r.Field<DateTime?>("UpdatedAt"))
+                    .Where(d => d.HasValue)
+                    .OrderByDescending(d => d)
+                    .FirstOrDefault();
             }
             catch (Exception ex)
             {
@@ -352,42 +242,30 @@ namespace HotelMgt.UserControls.Employee
 
         private void DgvRooms_SelectionChanged(object? sender, EventArgs e)
         {
-            UpdateAmenitiesFromSelection();
+            UpdateSidePanelFromSelection();
         }
 
-        private void UpdateAmenitiesFromSelection()
+        private void UpdateSidePanelFromSelection()
         {
-            if (dgvRooms == null || dgvRooms.SelectedRows.Count == 0)
+            if (dgvRooms?.CurrentRow?.DataBoundItem is DataRowView drv)
             {
-                SetAmenitiesText("Select a room to view amenities.");
-                return;
+                var amenities = Convert.ToString(drv["Amenities"]);
+                var description = Convert.ToString(drv["Description"]);
+                lblAmenitiesText.Text = string.IsNullOrWhiteSpace(amenities) ? "No amenities listed." : FormatAmenitiesList(amenities);
+                lblDescriptionText.Text = string.IsNullOrWhiteSpace(description) ? "No description." : description;
+            }
+            else
+            {
+                lblAmenitiesText.Text = "Select a room to view amenities.";
+                lblDescriptionText.Text = "Select a room to view description.";
             }
 
-            var row = dgvRooms.SelectedRows[0];
-            string? amenitiesRaw = row.Cells["Amenities"]?.Value?.ToString();
-
-            if (string.IsNullOrWhiteSpace(amenitiesRaw))
-            {
-                SetAmenitiesText("No amenities listed.");
-                return;
-            }
-
-            // Beautify amenities: support comma-separated or semicolon-separated lists
-            SetAmenitiesText(FormatAmenitiesList(amenitiesRaw));
-        }
-
-        private void SetAmenitiesText(string text)
-        {
-            if (lblAmenitiesText == null) return;
-
-            lblAmenitiesText.Text = text;
-            // ensure wrapping fits new width
-            lblAmenitiesText.MaximumSize = new Size(pnlAmenities.Width - 32, 0);
+            // Force reflow so Description is always beneath Amenities
+            AvailableRoomsViewBuilder.ReflowAmenitiesPanel(pnlAmenities, lblAmenitiesText, lblDescriptionTitle, lblDescriptionText);
         }
 
         private static string FormatAmenitiesList(string raw)
         {
-            // Normalize delimiters
             var parts = raw
                 .Replace("\r", " ")
                 .Replace("\n", " ")
@@ -404,35 +282,33 @@ namespace HotelMgt.UserControls.Employee
             return sb.Length == 0 ? "No amenities listed." : sb.ToString().TrimEnd();
         }
 
-        // Simple rounded outline like other screens
-        private void AttachRoundedBorder(Control ctrl, int radius, Color borderColor)
+        private void SharedTimerManager_SharedTick(object? sender, EventArgs e)
         {
-            ctrl.Paint += (s, e) =>
+            // Only refresh if the control is visible and parented (tab is active)
+            if (!this.Visible || !this.Parent?.Visible == true) return;
+
+            try
             {
-                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                using var pen = new Pen(borderColor, 1.5f);
-                var rect = ctrl.ClientRectangle;
-                rect.Width -= 1;
-                rect.Height -= 1;
-                using var path = GetRoundedRectPath(rect, radius);
-                e.Graphics.DrawPath(pen, path);
-            };
+                var latest = GetLatestRoomUpdatedAt();
+                if (latest.HasValue && (!_lastRoomsUpdatedAt.HasValue || latest > _lastRoomsUpdatedAt))
+                {
+                    LoadRooms();
+                }
+            }
+            catch
+            {
+                // swallow
+            }
         }
 
-        private static GraphicsPath GetRoundedRectPath(Rectangle rect, int radius)
+        // Helper to get the latest UpdatedAt from Rooms
+        private DateTime? GetLatestRoomUpdatedAt()
         {
-            var path = new GraphicsPath();
-            int d = radius * 2;
-            var arc = new Rectangle(rect.X, rect.Y, d, d);
-            path.AddArc(arc, 180, 90);
-            arc.X = rect.Right - d;
-            path.AddArc(arc, 270, 90);
-            arc.Y = rect.Bottom - d;
-            path.AddArc(arc, 0, 90);
-            arc.X = rect.Left;
-            path.AddArc(arc, 90, 90);
-            path.CloseFigure();
-            return path;
+            using var conn = _dbService.GetConnection();
+            conn.Open();
+            using var cmd = new SqlCommand("SELECT MAX(UpdatedAt) FROM Rooms", conn);
+            var result = cmd.ExecuteScalar();
+            return result is DateTime dt ? dt : (result != DBNull.Value ? Convert.ToDateTime(result) : null);
         }
     }
 }
